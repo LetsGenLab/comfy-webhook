@@ -20,6 +20,7 @@ class WebhookTests(unittest.TestCase):
         self.assertTrue(Webhook.OUTPUT_NODE)
         self.assertEqual(Webhook.RETURN_TYPES, ())
         self.assertEqual(set(Webhook.INPUT_TYPES()["required"]), {"url"})
+        self.assertFalse(Webhook.INPUT_TYPES()["optional"]["auto_clean_once_done"][1]["default"])
         self.assertEqual(Webhook().configure("https://example.com/hook"), ())
 
     def test_real_package_entry_enables_node_without_environment_settings(self):
@@ -34,7 +35,7 @@ class WebhookTests(unittest.TestCase):
                 "webhook_package_test", root / "__init__.py", submodule_search_locations=[str(root)])
             module = importlib.util.module_from_spec(spec)
             fake_server = SimpleNamespace(PromptServer=SimpleNamespace(instance=SimpleNamespace(prompt_queue=queue)))
-            fake_paths = SimpleNamespace(get_user_directory=lambda: tmp)
+            fake_paths = SimpleNamespace(get_user_directory=lambda: tmp, get_output_directory=lambda: tmp)
             with patch.dict(sys.modules, {"webhook_package_test": module, "server": fake_server, "folder_paths": fake_paths}), \
                     patch.dict("os.environ", {}, clear=True):
                 try:
@@ -56,7 +57,7 @@ class WebhookTests(unittest.TestCase):
             currently_running = {1: (0, "job-1", graph, {})}
             def task_done(self, *args, **kwargs): return "done"
         queue = Queue()
-        install_queue_hook(queue, SimpleNamespace(add=lambda event, url: recorded.append((event, url))))
+        install_queue_hook(queue, SimpleNamespace(add=lambda event, url, **kwargs: recorded.append((event, url))))
         status = SimpleNamespace(status_str="error", messages=[("execution_error", {"node_id": "other"})])
         self.assertEqual(queue.task_done(1, {}, status), "done")
         self.assertEqual(recorded[0][0]["status"], "failed")
@@ -188,7 +189,7 @@ class WebhookTests(unittest.TestCase):
                 self.assert_recorded = len(captured)
                 return "done"
         queue = Queue()
-        install_queue_hook(queue, SimpleNamespace(add=lambda event, url: captured.append((event, url))))
+        install_queue_hook(queue, SimpleNamespace(add=lambda event, url, **kwargs: captured.append((event, url))))
         self.assertEqual(queue.task_done(1, {}, SimpleNamespace(status_str="error", messages=[])), "done")
         self.assertEqual(queue.assert_recorded, 1)
         self.assertEqual(captured[0][0]["status"], "failed")

@@ -53,11 +53,11 @@ def event_from_completion(prompt_id, status, history):
     return event
 
 
-def workflow_callback(graph):
-    """Read a literal URL from the submitted graph, even when execution fails."""
+def workflow_settings(graph):
+    """Read literal node settings even when execution fails before the node runs."""
     if not isinstance(graph, dict):
-        return None
-    urls = []
+        return None, False
+    settings = []
     for node in graph.values():
         if not isinstance(node, dict) or node.get("class_type") != "ComfyWebhook":
             continue
@@ -65,11 +65,17 @@ def workflow_callback(graph):
         value = inputs.get("url") if isinstance(inputs, dict) else None
         if not isinstance(value, str):
             raise ValueError("Webhook node URL must be a text value")
-        if value.strip():
-            urls.append(value.strip())
-    if len(urls) > 1:
+        clean = inputs.get("auto_clean_once_done", False)
+        if not isinstance(clean, bool):
+            raise ValueError("Auto clean must be a boolean value")
+        settings.append((value.strip() or None, clean))
+    if len(settings) > 1:
         raise ValueError("Use only one webhook node per workflow")
-    return urls[0] if urls else None
+    return settings[0] if settings else (None, False)
+
+
+def workflow_callback(graph):
+    return workflow_settings(graph)[0]
 
 
 def install_queue_hook(queue, outbox):
@@ -85,9 +91,16 @@ def install_queue_hook(queue, outbox):
             extra = item[3] if item and len(item) > 3 and isinstance(item[3], dict) else {}
             callback = extra.get("webhook_url")
         try:
+            node_callback, auto_clean = workflow_settings(graph)
             if callback is None:
-                callback = workflow_callback(graph)
-            outbox.add(event_from_completion(prompt_id, status, history_result), callback)
+                callback = node_callback
+            cached_nodes = {str(node) for entry in (status.messages or [])
+                            if isinstance(entry, (tuple, list)) and len(entry) == 2
+                            and entry[0] == "execution_cached" and isinstance(entry[1], dict)
+                            and isinstance(entry[1].get("nodes"), list)
+                            for node in entry[1].get("nodes", [])}
+            outbox.add(event_from_completion(prompt_id, status, history_result), callback,
+                       auto_clean=auto_clean, cached_nodes=cached_nodes)
         except Exception:
             LOG.exception("Could not persist completion event")
         return original(item_id, history_result, status, process_item=process_item)

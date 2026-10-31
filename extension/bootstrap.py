@@ -9,7 +9,7 @@ from .outbox import Outbox
 LOG = logging.getLogger("comfy-webhook")
 
 
-def start(queue, user_directory, environ=os.environ):
+def start(queue, user_directory, environ=os.environ, output_directory=None):
     path = environ.get("COMFY_WEBHOOK_OUTBOX_PATH", "").strip()
     if not path:
         directory = os.path.join(os.path.abspath(user_directory), "comfy-webhook")
@@ -20,7 +20,7 @@ def start(queue, user_directory, environ=os.environ):
         path, callback,
         retry_initial=float(environ.get("COMFY_WEBHOOK_RETRY_INITIAL", "1")),
         retry_max=float(environ.get("COMFY_WEBHOOK_RETRY_MAX", "30")),
-        timeout=float(environ.get("COMFY_WEBHOOK_TIMEOUT", "120")),
+        timeout=float(environ.get("COMFY_WEBHOOK_TIMEOUT", "120")), output_root=output_directory,
     )
     install_queue_hook(queue, outbox)
     stop, thread = outbox.start()

@@ -1,0 +1,1 @@
+"""Optional managed delivery protocol."""
