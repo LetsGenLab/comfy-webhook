@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -128,6 +130,56 @@ class EventTests(unittest.TestCase):
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_staged_cleanup_is_scoped_and_refuses_live_or_unacknowledged_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);inputs=root/'inputs';inputs.mkdir()
+            box=Outbox(str(root/'events.sqlite'),'https://example.com/hook',input_root=str(inputs))
+            prompt_id=str(uuid.uuid4());name=f'sample-input-{prompt_id}-token.png';other='unrelated.png'
+            (inputs/name).write_bytes(b'data');(inputs/other).write_bytes(b'keep')
+            queue=SimpleNamespace(mutex=threading.Lock(),queue=[(1,prompt_id)],currently_running={})
+            self.assertFalse(box.cleanup_staged(prompt_id,[name],queue));self.assertTrue((inputs/name).exists())
+            queue.queue=[];queue.currently_running={1:(1,prompt_id)}
+            self.assertFalse(box.cleanup_staged(prompt_id,[name],queue));self.assertTrue((inputs/name).exists())
+            queue.currently_running={}
+            box.add({'version':1,'deliveryId':prompt_id,'promptId':prompt_id,'status':'failed','outputs':[]})
+            self.assertFalse(box.cleanup_staged(prompt_id,[name],queue));self.assertTrue((inputs/name).exists())
+            with sqlite3.connect(box.path) as db: db.execute('DELETE FROM events WHERE id=?',(prompt_id,))
+            with self.assertRaises(ValueError): box.cleanup_staged(prompt_id,['../'+other],queue)
+            self.assertTrue(box.cleanup_staged(prompt_id,[name],queue));self.assertFalse((inputs/name).exists())
+            self.assertTrue((inputs/other).exists());self.assertTrue(box.cleanup_staged(prompt_id,[name],queue))
+            queue.queue=[('malformed',)]
+            self.assertFalse(box.cleanup_staged(prompt_id,[name],queue))
+
+    def test_optional_signature_covers_both_completion_and_cleanup_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key = 'a' * 32
+            box = Outbox(str(Path(tmp) / 'events.sqlite'), 'https://example.com/hook', signing_key=key)
+            known = box._request('https://example.com/hook', b'{"status":"succeeded","promptId":"job"}')
+            self.assertEqual(known.get_header('X-comfy-webhook-signature'),
+                             'sha256=4c535807f214fc6c9c3c9b9f8eed3b8c7ad992badbac8b55d405e6b30cdc07fe')
+            prompt_id = str(uuid.uuid4())
+            box.add({'version': 1, 'deliveryId': prompt_id, 'promptId': prompt_id, 'status': 'failed', 'outputs': []})
+            seen = []
+            class Response:
+                status = 200
+                def __init__(self, status): self.result = status
+                def __enter__(self): return self
+                def __exit__(self, *_args): pass
+                def read(self, _limit):
+                    return json.dumps({'accepted': True, 'status': self.result, 'cleanupAckRequired': True}).encode()
+            class Receiver:
+                def open(self, request, timeout):
+                    expected = 'sha256=' + hmac.new(key.encode(), request.data, hashlib.sha256).hexdigest()
+                    self_signature = request.get_header('X-comfy-webhook-signature')
+                    seen.append((json.loads(request.data)['status'], self_signature))
+                    if self_signature != expected: raise AssertionError('callback signature mismatch')
+                    return Response('failed' if len(seen) == 1 else 'cleaned')
+            self.assertTrue(box.deliver_one(now=100, opener=Receiver()))
+            self.assertEqual([item[0] for item in seen], ['failed', 'cleaned'])
+            self.assertNotEqual(seen[0][1], seen[1][1])
+            with self.assertRaisesRegex(ValueError, '32 to 1024'):
+                Outbox(str(Path(tmp) / 'bad.sqlite'), 'https://example.com/hook', signing_key='short')
+
     def test_a_slow_callback_does_not_block_another_event(self):
         with tempfile.TemporaryDirectory() as tmp:
             box = Outbox(str(Path(tmp) / "events.sqlite"), "https://example.com/hook")

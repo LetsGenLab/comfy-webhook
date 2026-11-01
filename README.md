@@ -130,6 +130,7 @@ can be enabled with the following environment variables before starting ComfyUI:
 | `COMFY_WEBHOOK_MANAGED_API_PREFIX` | One path segment for capability and recovery endpoints, default `/webhook-managed`. |
 | `COMFY_WEBHOOK_MANAGED_INPUT_PREFIX` | Prefix for owned inputs, default `comfy-input`. |
 | `COMFY_WEBHOOK_MANAGED_OUTPUT_PREFIX` | Prefix for owned MP4 outputs, default `comfy`. |
+| `COMFY_WEBHOOK_MANAGED_SIGNING_KEY` | Optional secret, 32–1024 UTF-8 bytes, used to authenticate managed callbacks. Store it privately and share it only with the receiver. |
 
 The protocol requires a UUID prompt ID and top-level input names shaped like
 `<input-prefix>-<uuid>-<token>.png` (also `.jpg`, `.jpeg`, or `.webp`), and
@@ -150,8 +151,28 @@ Managed and generic outboxes are independent; preserve the managed outbox and
 files while a callback or cleanup is unresolved. A failure to persist an event
 is logged and does not prevent ComfyUI from finishing, so persistent storage
 and monitoring remain necessary.
+The authenticated server can also receive `POST /staged/{prompt_id}/cleanup`
+with `{"files":[...]}` under the configured API prefix, for task-owned inputs
+uploaded before a definitively rejected prompt. It refuses cleanup while that
+prompt is queued, running, or has an unacknowledged managed event. Call it only
+after the receiver knows the graph was not accepted; an ambiguous submission
+must remain unresolved.
+This endpoint requires the managed signing key and the same
+`X-Comfy-Webhook-Signature` HMAC over the exact request body; unsigned requests
+are rejected even when the server itself is otherwise reachable.
 Managed jobs use the acknowledgement-and-cleanup protocol independently of the
 ordinary node's switch; they do not need a Webhook node in the graph.
+
+When a signing key is configured, each managed completion and `cleaned` request
+contains `X-Comfy-Webhook-Signature: sha256=<hex>`, where the value is HMAC-SHA256
+over the exact request body bytes. The receiver must compare signatures in
+constant time and deduplicate by prompt ID and event contents. Retries send the
+same event again, so a valid signature alone does not prevent replay. With no
+key configured, the header is omitted for compatibility. The capability
+response includes `callback_signature: 1` only when signing is configured.
+In signed mode it also reports the managed callback field, filename prefixes,
+and SHA-256 hashes of allowed callback URLs. A receiver can compare these
+before assigning work, without exposing callback URLs in the capability response.
 
 ## Test
 
