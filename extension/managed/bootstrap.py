@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -84,9 +85,15 @@ def start(server, input_root, output_root, environ=os.environ):
         if request.content_length is not None and request.content_length > 4096:
             return web.json_response({"error": "too large"}, status=413)
         try:
-            body = await request.content.read(4097)
-            if len(body) > 4096:
-                return web.json_response({"error": "too large"}, status=413)
+            body = bytearray()
+            async for chunk in request.content.iter_chunked(1024):
+                body.extend(chunk)
+                if len(body) > 4096:
+                    return web.json_response({"error": "too large"}, status=413)
+            signature = request.headers.get("X-Comfy-Webhook-Signature", "")
+            if signing_key is None or not isinstance(signature, str) or not re.fullmatch(r"sha256=[0-9a-f]{64}", signature) or not hmac.compare_digest(
+                    signature, "sha256=" + hmac.new(signing_key.encode(), body, hashlib.sha256).hexdigest()):
+                return web.json_response({"error": "unauthorized"}, status=401)
             data = json.loads(body)
             if not isinstance(data, dict) or set(data) != {"files"}:
                 raise ValueError("Invalid request")

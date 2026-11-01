@@ -157,6 +157,9 @@ uploaded before a definitively rejected prompt. It refuses cleanup while that
 prompt is queued, running, or has an unacknowledged managed event. Call it only
 after the receiver knows the graph was not accepted; an ambiguous submission
 must remain unresolved.
+This endpoint requires the managed signing key and the same
+`X-Comfy-Webhook-Signature` HMAC over the exact request body; unsigned requests
+are rejected even when the server itself is otherwise reachable.
 Managed jobs use the acknowledgement-and-cleanup protocol independently of the
 ordinary node's switch; they do not need a Webhook node in the graph.
 

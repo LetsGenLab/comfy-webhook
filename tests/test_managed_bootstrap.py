@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import hmac
 import json
 import tempfile
 import threading
@@ -87,6 +88,43 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(capability['staged_cleanup'], 1)
             self.assertEqual(capability['callback_url_hashes'], [hashlib.sha256(b'https://receiver.example/callback').hexdigest()])
             self.assertIn(('POST', '/webhook-managed/staged/{prompt_id}/cleanup'), handlers)
+
+    def test_staged_cleanup_requires_signature_and_reads_full_chunked_body(self):
+        handlers = {}
+        def route(method):
+            def register(path):
+                def decorate(handler):
+                    handlers[(method, path)] = handler
+                    return handler
+                return decorate
+            return register
+        server = SimpleNamespace(routes=SimpleNamespace(get=route('GET'), post=route('POST'), delete=route('DELETE')),
+                                 prompt_queue=SimpleNamespace(delete_history_item=lambda _: None))
+        class Content:
+            def __init__(self, chunks): self.chunks = chunks
+            async def iter_chunked(self, _size):
+                for chunk in self.chunks: yield chunk
+        thread = SimpleNamespace(is_alive=lambda: True)
+        with tempfile.TemporaryDirectory() as root, patch('extension.managed.bootstrap.Outbox') as box, \
+                patch('extension.managed.bootstrap.install_queue_hook'):
+            box.return_value.start.return_value = (None, thread)
+            box.return_value.cleanup_staged.return_value = True
+            key='a'*32
+            env={'COMFY_WEBHOOK_MANAGED_OUTBOX_PATH':str(Path(root)/'events.sqlite'),
+                 'COMFY_WEBHOOK_MANAGED_CALLBACKS':'https://receiver.example/callback',
+                 'COMFY_WEBHOOK_MANAGED_SIGNING_KEY':key}
+            start(server,root,root,env)
+            handler=handlers[('POST','/webhook-managed/staged/{prompt_id}/cleanup')]
+            body=b'{"files":[]}'
+            signature='sha256='+hmac.new(key.encode(),body,hashlib.sha256).hexdigest()
+            def request(chunks, header):
+                return SimpleNamespace(content_length=None,content=Content(chunks),headers=header,
+                                       match_info={'prompt_id':'00000000-0000-4000-8000-000000000001'})
+            self.assertEqual(asyncio.run(handler(request([body],{}))).status,401)
+            self.assertEqual(asyncio.run(handler(request([body],{'X-Comfy-Webhook-Signature':'sha256='+'0'*64}))).status,401)
+            self.assertEqual(asyncio.run(handler(request([body[:4],body[4:]],{'X-Comfy-Webhook-Signature':signature}))).status,200)
+            self.assertEqual(asyncio.run(handler(request([body,b'x'*4096],{'X-Comfy-Webhook-Signature':signature}))).status,413)
+            self.assertEqual(box.return_value.cleanup_staged.call_count,1)
 
     def test_generic_and_managed_hooks_handle_separate_jobs(self):
         emitted = []
