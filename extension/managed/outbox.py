@@ -1,5 +1,7 @@
 """Durable, asynchronous completion delivery."""
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -22,13 +24,16 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Outbox:
-    def __init__(self, path, callback, output_root=None, input_root=None, clear_history=None, *, input_prefix, output_prefix):
+    def __init__(self, path, callback, output_root=None, input_root=None, clear_history=None, *, input_prefix, output_prefix, signing_key=None):
         url = urllib.parse.urlsplit(callback)
         if ((callback and (url.scheme != "https" or not url.hostname or url.username or url.password or url.fragment))
                 or not os.path.isabs(path)):
             raise ValueError("Invalid callback configuration")
         self.path, self.callback, self.output_root, self.input_root = path, callback, output_root, input_root
         self.input_prefix, self.output_prefix = input_prefix, output_prefix
+        if signing_key is not None and (not isinstance(signing_key, str) or not 32 <= len(signing_key.encode()) <= 1024):
+            raise ValueError("Managed webhook signing key must be 32 to 1024 bytes")
+        self._signing_key = signing_key.encode() if signing_key is not None else None
         self.clear_history = clear_history
         fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
         os.close(fd)
@@ -43,6 +48,12 @@ class Outbox:
 
     def connect(self):
         return sqlite3.connect(self.path, timeout=5)
+
+    def _request(self, callback, body):
+        headers = {"Content-Type": "application/json", "User-Agent": "ComfyUI-Webhook-Managed/1.0"}
+        if self._signing_key is not None:
+            headers["X-Comfy-Webhook-Signature"] = "sha256=" + hmac.new(self._signing_key, body, hashlib.sha256).hexdigest()
+        return urllib.request.Request(callback, data=body, method="POST", headers=headers)
 
     def add(self, event, callback=None, input_files=()):
         if not callback and not self.callback:
@@ -132,10 +143,7 @@ class Outbox:
         if row is None:
             return False
         delivery_id, body, attempts, callback, input_files = row
-        request = urllib.request.Request(callback or self.callback, data=body, method="POST", headers={
-            "Content-Type": "application/json",
-            "User-Agent": "ComfyUI-Webhook-Managed/1.0",
-        })
+        request = self._request(callback or self.callback, body)
         try:
             client = opener or urllib.request.build_opener(NoRedirect())
             with client.open(request, timeout=120) as response:
@@ -181,9 +189,7 @@ class Outbox:
                     # both cleanup and delivery are safe to repeat.
                     ack = json.dumps({"version": 1, "deliveryId": delivery_id,
                                       "promptId": delivery_id, "status": "cleaned"}, separators=(",", ":")).encode()
-                    cleanup_request = urllib.request.Request(callback or self.callback, data=ack, method="POST", headers={
-                        "Content-Type": "application/json", "User-Agent": "ComfyUI-Webhook-Managed/1.0",
-                    })
+                    cleanup_request = self._request(callback or self.callback, ack)
                     with client.open(cleanup_request, timeout=120) as cleanup_response:
                         if not 200 <= cleanup_response.status < 300:
                             raise OSError("Cleanup callback returned non-success status")

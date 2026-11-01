@@ -1,6 +1,7 @@
 """Optional managed delivery with acknowledged, task-scoped cleanup."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ def start(server, input_root, output_root, environ=os.environ):
     output_prefix = environ.get("COMFY_WEBHOOK_MANAGED_OUTPUT_PREFIX", "comfy").strip()
     api_prefix = environ.get("COMFY_WEBHOOK_MANAGED_API_PREFIX", "/webhook-managed").strip()
     callbacks = frozenset(x.strip() for x in environ.get("COMFY_WEBHOOK_MANAGED_CALLBACKS", "").split(",") if x.strip())
+    signing_key = environ.get("COMFY_WEBHOOK_MANAGED_SIGNING_KEY")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", callback_field):
         raise ValueError("Invalid managed callback field")
     if callback_field == "webhook_url":
@@ -40,13 +42,20 @@ def start(server, input_root, output_root, environ=os.environ):
             raise ValueError("Invalid managed callback URL")
     queue = server.prompt_queue
     outbox = Outbox(path, "", output_root, input_root, queue.delete_history_item,
-                    input_prefix=input_prefix, output_prefix=output_prefix)
+                    input_prefix=input_prefix, output_prefix=output_prefix, signing_key=signing_key)
     install_queue_hook(queue, outbox, callback_field, callbacks, input_prefix, output_prefix)
     stop, thread = outbox.start()
 
     @server.routes.get(api_prefix + "/capabilities")
     async def capabilities(_request):
-        return web.json_response({"callback": 1 if thread.is_alive() else 0, "cleanup_ack": 1, "outbox_recovery": 2})
+        capabilities = {"callback": 1 if thread.is_alive() else 0, "cleanup_ack": 1, "outbox_recovery": 2}
+        if signing_key is not None:
+            capabilities["callback_signature"] = 1
+            capabilities["callback_field"] = callback_field
+            capabilities["input_prefix"] = input_prefix
+            capabilities["output_prefix"] = output_prefix
+            capabilities["callback_url_hashes"] = sorted(hashlib.sha256(url.encode()).hexdigest() for url in callbacks)
+        return web.json_response(capabilities)
 
     @server.routes.get(api_prefix + "/outbox/{prompt_id}")
     async def pending(request):

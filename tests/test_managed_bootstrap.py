@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import tempfile
 import threading
@@ -56,6 +57,34 @@ class BootstrapTests(unittest.TestCase):
         for env in invalid:
             with self.subTest(env=env), self.assertRaises(ValueError):
                 start(None, "/inputs", "/outputs", env)
+
+    def test_signature_capability_is_advertised_when_configured(self):
+        handlers = {}
+        def route(method):
+            def register(path):
+                def decorate(handler):
+                    handlers[(method, path)] = handler
+                    return handler
+                return decorate
+            return register
+        server = SimpleNamespace(routes=SimpleNamespace(get=route('GET'), post=route('POST'), delete=route('DELETE')),
+                                 prompt_queue=SimpleNamespace(delete_history_item=lambda _: None))
+        thread = SimpleNamespace(is_alive=lambda: True)
+        with tempfile.TemporaryDirectory() as root, patch('extension.managed.bootstrap.Outbox') as box, \
+                patch('extension.managed.bootstrap.install_queue_hook'):
+            box.return_value.start.return_value = (None, thread)
+            env = {'COMFY_WEBHOOK_MANAGED_OUTBOX_PATH': str(Path(root)/'events.sqlite'),
+                   'COMFY_WEBHOOK_MANAGED_CALLBACKS': 'https://receiver.example/callback',
+                   'COMFY_WEBHOOK_MANAGED_SIGNING_KEY': 'a' * 32}
+            start(server, root, root, env)
+            self.assertEqual(box.call_args.kwargs['signing_key'], 'a' * 32)
+            response = asyncio.run(handlers[('GET', '/webhook-managed/capabilities')](None))
+            capability = json.loads(response.body)
+            self.assertEqual(capability['callback_signature'], 1)
+            self.assertEqual(capability['callback_field'], 'managed_webhook_url')
+            self.assertEqual(capability['input_prefix'], 'comfy-input')
+            self.assertEqual(capability['output_prefix'], 'comfy')
+            self.assertEqual(capability['callback_url_hashes'], [hashlib.sha256(b'https://receiver.example/callback').hexdigest()])
 
     def test_generic_and_managed_hooks_handle_separate_jobs(self):
         emitted = []
