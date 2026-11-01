@@ -151,6 +151,12 @@ Managed and generic outboxes are independent; preserve the managed outbox and
 files while a callback or cleanup is unresolved. A failure to persist an event
 is logged and does not prevent ComfyUI from finishing, so persistent storage
 and monitoring remain necessary.
+The authenticated server can also receive `POST /staged/{prompt_id}/cleanup`
+with `{"files":[...]}` under the configured API prefix, for task-owned inputs
+uploaded before a definitively rejected prompt. It refuses cleanup while that
+prompt is queued, running, or has an unacknowledged managed event. Call it only
+after the receiver knows the graph was not accepted; an ambiguous submission
+must remain unresolved.
 Managed jobs use the acknowledgement-and-cleanup protocol independently of the
 ordinary node's switch; they do not need a Webhook node in the graph.
 

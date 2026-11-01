@@ -55,6 +55,7 @@ def start(server, input_root, output_root, environ=os.environ):
             capabilities["input_prefix"] = input_prefix
             capabilities["output_prefix"] = output_prefix
             capabilities["callback_url_hashes"] = sorted(hashlib.sha256(url.encode()).hexdigest() for url in callbacks)
+            capabilities["staged_cleanup"] = 1
         return web.json_response(capabilities)
 
     @server.routes.get(api_prefix + "/outbox/{prompt_id}")
@@ -77,6 +78,22 @@ def start(server, input_root, output_root, environ=os.environ):
     async def forget(request):
         ok = await asyncio.to_thread(outbox.forget_cleaned, request.match_info["prompt_id"])
         return web.json_response({"accepted": True}) if ok else web.json_response({"error": "not ready"}, status=409)
+
+    @server.routes.post(api_prefix + "/staged/{prompt_id}/cleanup")
+    async def staged_cleanup(request):
+        if request.content_length is not None and request.content_length > 4096:
+            return web.json_response({"error": "too large"}, status=413)
+        try:
+            body = await request.content.read(4097)
+            if len(body) > 4096:
+                return web.json_response({"error": "too large"}, status=413)
+            data = json.loads(body)
+            if not isinstance(data, dict) or set(data) != {"files"}:
+                raise ValueError("Invalid request")
+            ok = await asyncio.to_thread(outbox.cleanup_staged, request.match_info["prompt_id"], data["files"], queue)
+        except (ValueError, OSError, json.JSONDecodeError):
+            ok = False
+        return web.json_response({"status": "cleaned"}) if ok else web.json_response({"error": "not ready"}, status=409)
 
     LOG.info("Managed webhook observer enabled")
     return outbox, stop, thread

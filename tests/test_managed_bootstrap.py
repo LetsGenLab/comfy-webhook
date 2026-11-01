@@ -84,7 +84,9 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(capability['callback_field'], 'managed_webhook_url')
             self.assertEqual(capability['input_prefix'], 'comfy-input')
             self.assertEqual(capability['output_prefix'], 'comfy')
+            self.assertEqual(capability['staged_cleanup'], 1)
             self.assertEqual(capability['callback_url_hashes'], [hashlib.sha256(b'https://receiver.example/callback').hexdigest()])
+            self.assertIn(('POST', '/webhook-managed/staged/{prompt_id}/cleanup'), handlers)
 
     def test_generic_and_managed_hooks_handle_separate_jobs(self):
         emitted = []

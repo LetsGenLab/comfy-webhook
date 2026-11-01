@@ -228,6 +228,23 @@ class Outbox:
                 except FileNotFoundError:
                     pass  # An earlier attempt may have already removed it.
 
+    def cleanup_staged(self, prompt_id, files, queue):
+        """Remove explicitly owned inputs only while this prompt is not queued or running."""
+        if (not isinstance(prompt_id, str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", prompt_id)
+                or not isinstance(files, list) or len(files) > 9):
+            raise ValueError("Invalid staged cleanup request")
+        with queue.mutex:
+            pending, running = getattr(queue, "queue", None), getattr(queue, "currently_running", None)
+            if not isinstance(pending, list) or not isinstance(running, dict):
+                return False
+            entries = pending + list(running.values())
+            if any(not isinstance(item, (tuple, list)) or len(item) < 2 for item in entries):
+                return False
+            if any(item[1] == prompt_id for item in entries) or self.pending_event(prompt_id) is not None:
+                return False
+            self.cleanup_inputs(prompt_id, files)
+            return True
+
     def cleanup_output(self, event):
         """Delete only the acknowledged task video, never unrelated UI files."""
         prompt_id = event.get("promptId", "")

@@ -130,6 +130,26 @@ class EventTests(unittest.TestCase):
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_staged_cleanup_is_scoped_and_refuses_live_or_unacknowledged_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);inputs=root/'inputs';inputs.mkdir()
+            box=Outbox(str(root/'events.sqlite'),'https://example.com/hook',input_root=str(inputs))
+            prompt_id=str(uuid.uuid4());name=f'sample-input-{prompt_id}-token.png';other='unrelated.png'
+            (inputs/name).write_bytes(b'data');(inputs/other).write_bytes(b'keep')
+            queue=SimpleNamespace(mutex=threading.Lock(),queue=[(1,prompt_id)],currently_running={})
+            self.assertFalse(box.cleanup_staged(prompt_id,[name],queue));self.assertTrue((inputs/name).exists())
+            queue.queue=[];queue.currently_running={1:(1,prompt_id)}
+            self.assertFalse(box.cleanup_staged(prompt_id,[name],queue));self.assertTrue((inputs/name).exists())
+            queue.currently_running={}
+            box.add({'version':1,'deliveryId':prompt_id,'promptId':prompt_id,'status':'failed','outputs':[]})
+            self.assertFalse(box.cleanup_staged(prompt_id,[name],queue));self.assertTrue((inputs/name).exists())
+            with sqlite3.connect(box.path) as db: db.execute('DELETE FROM events WHERE id=?',(prompt_id,))
+            with self.assertRaises(ValueError): box.cleanup_staged(prompt_id,['../'+other],queue)
+            self.assertTrue(box.cleanup_staged(prompt_id,[name],queue));self.assertFalse((inputs/name).exists())
+            self.assertTrue((inputs/other).exists());self.assertTrue(box.cleanup_staged(prompt_id,[name],queue))
+            queue.queue=[('malformed',)]
+            self.assertFalse(box.cleanup_staged(prompt_id,[name],queue))
+
     def test_optional_signature_covers_both_completion_and_cleanup_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             key = 'a' * 32
