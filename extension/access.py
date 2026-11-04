@@ -15,6 +15,7 @@ def install(server, environ=os.environ):
     if not token:
         return False
     token_bytes = token.encode("utf-8")
+    allowed_origin = environ.get("COMFY_WEBHOOK_ALLOWED_ORIGIN", "").strip()
     valid_token = 32 <= len(token_bytes) <= 1024 and "\n" not in token and "\r" not in token
     if not valid_token:
         logging.getLogger("comfy-webhook").error("API token is invalid; all requests are denied")
@@ -22,6 +23,9 @@ def install(server, environ=os.environ):
 
     @web.middleware
     async def authenticate(request, handler):
+        origin = request.headers.get("Origin")
+        if origin is not None and (not allowed_origin or origin != allowed_origin):
+            return web.Response(status=403)
         header = request.headers.get("Authorization", "")
         candidate = b""
         if len(header) <= 4096 and header.startswith("Bearer "):

@@ -25,6 +25,12 @@ can sign in using HTTP Basic authentication with username `comfy` and the token
 as its password. Use HTTPS; do not put the token in a URL, workflow, log or Git
 repository. Without the variable, the plugin does not change server access.
 
+For browser access, set `COMFY_WEBHOOK_ALLOWED_ORIGIN` to the exact public
+HTTPS origin, without a trailing slash. With a token enabled, requests that
+carry any other `Origin` are rejected, even if ComfyUI's CORS settings are
+permissive. If this setting is absent, all requests carrying an `Origin`
+header are denied. API clients that omit `Origin` are unaffected.
+
 Custom-node import failures can prevent this middleware from loading while
 ComfyUI continues to run. Before using a machine, verify that an unauthenticated
 request is rejected and an authenticated request succeeds; use a private
