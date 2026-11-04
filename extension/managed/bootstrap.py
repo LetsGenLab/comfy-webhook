@@ -17,14 +17,21 @@ from .outbox import Outbox
 LOG = logging.getLogger("comfy-webhook-managed")
 
 
-def start(server, input_root, output_root, environ=os.environ):
+def start(server, input_root, output_root, environ=os.environ, *, user_directory=None):
     path = environ.get("COMFY_WEBHOOK_MANAGED_OUTBOX_PATH", "").strip()
+    automatic = not path and environ.get("COMFY_WEBHOOK_MANAGED_ENABLED", "").strip() == "1"
+    if automatic and user_directory is None:
+        raise ValueError("Managed mode requires a user directory")
+    if automatic:
+        directory = os.path.join(os.path.abspath(user_directory), "comfy-webhook")
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        path = os.path.join(directory, "managed-outbox.sqlite")
     if not path:
         return None
-    callback_field = environ.get("COMFY_WEBHOOK_MANAGED_CALLBACK_FIELD", "managed_webhook_url").strip()
-    input_prefix = environ.get("COMFY_WEBHOOK_MANAGED_INPUT_PREFIX", "comfy-input").strip()
-    output_prefix = environ.get("COMFY_WEBHOOK_MANAGED_OUTPUT_PREFIX", "comfy").strip()
-    api_prefix = environ.get("COMFY_WEBHOOK_MANAGED_API_PREFIX", "/webhook-managed").strip()
+    callback_field = environ.get("COMFY_WEBHOOK_MANAGED_CALLBACK_FIELD", "letsgen_callback_url" if automatic else "managed_webhook_url").strip()
+    input_prefix = environ.get("COMFY_WEBHOOK_MANAGED_INPUT_PREFIX", "letsgen-input" if automatic else "comfy-input").strip()
+    output_prefix = environ.get("COMFY_WEBHOOK_MANAGED_OUTPUT_PREFIX", "letsgen" if automatic else "comfy").strip()
+    api_prefix = environ.get("COMFY_WEBHOOK_MANAGED_API_PREFIX", "/letsgen" if automatic else "/webhook-managed").strip()
     callbacks = frozenset(x.strip() for x in environ.get("COMFY_WEBHOOK_MANAGED_CALLBACKS", "").split(",") if x.strip())
     signing_key = environ.get("COMFY_WEBHOOK_MANAGED_SIGNING_KEY")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", callback_field):

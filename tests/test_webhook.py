@@ -23,27 +23,39 @@ class WebhookTests(unittest.TestCase):
         self.assertFalse(Webhook.INPUT_TYPES()["optional"]["auto_clean_once_done"][1]["default"])
         self.assertEqual(Webhook().configure("https://example.com/hook"), ())
 
-    def test_real_package_entry_enables_node_without_environment_settings(self):
+    def test_real_package_entry_enables_node_and_configured_managed_observer(self):
         class Queue:
             mutex = threading.Lock()
             currently_running = {}
             def task_done(self, *args, **kwargs): pass
+            def delete_history_item(self, _id): pass
         queue = Queue()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(__file__).resolve().parent.parent
             spec = importlib.util.spec_from_file_location(
                 "webhook_package_test", root / "__init__.py", submodule_search_locations=[str(root)])
             module = importlib.util.module_from_spec(spec)
-            fake_server = SimpleNamespace(PromptServer=SimpleNamespace(instance=SimpleNamespace(prompt_queue=queue)))
-            fake_paths = SimpleNamespace(get_user_directory=lambda: tmp, get_output_directory=lambda: tmp)
+            def route(_path): return lambda fn: fn
+            routes = SimpleNamespace(get=route, post=route, delete=route)
+            fake_server = SimpleNamespace(PromptServer=SimpleNamespace(instance=SimpleNamespace(prompt_queue=queue, routes=routes)))
+            fake_paths = SimpleNamespace(get_user_directory=lambda: tmp, get_input_directory=lambda: tmp, get_output_directory=lambda: tmp)
             with patch.dict(sys.modules, {"webhook_package_test": module, "server": fake_server, "folder_paths": fake_paths}), \
-                    patch.dict("os.environ", {}, clear=True):
+                    patch.dict("os.environ", {"COMFY_WEBHOOK_MANAGED_ENABLED": "1",
+                                                "COMFY_WEBHOOK_MANAGED_CALLBACKS": "https://receiver.example/callback"}, clear=True):
                 try:
                     spec.loader.exec_module(module)
                     self.assertTrue(module.NODE_CLASS_MAPPINGS["ComfyWebhook"].OUTPUT_NODE)
                     self.assertTrue((Path(tmp) / "comfy-webhook" / "outbox.sqlite").exists())
+                    self.assertTrue((Path(tmp) / "comfy-webhook" / "managed-outbox.sqlite").exists())
                     self.assertTrue(queue._comfy_webhook_hook)
+                    self.assertTrue(queue._comfy_managed_completion_hook)
                 finally:
+                    if getattr(module, "_managed", None):
+                        box, stop, _thread = module._managed
+                        stop.set()
+                        for thread in box.threads:
+                            thread.join(timeout=5)
+                            self.assertFalse(thread.is_alive())
                     if hasattr(module, "_stop"):
                         module._stop.set()
                         module._thread.join(timeout=5)
