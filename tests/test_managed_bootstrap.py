@@ -17,6 +17,35 @@ from extension.managed.events import install_queue_hook as install_managed
 class BootstrapTests(unittest.TestCase):
     def test_disabled_by_default(self):
         self.assertIsNone(start(None, "/inputs", "/outputs", {}))
+        with tempfile.TemporaryDirectory() as root:
+            self.assertIsNone(start(None, root, root, {}, user_directory=root))
+
+    def test_enabled_plugin_registers_managed_delivery_with_configured_allowlist(self):
+        handlers = {}
+        def route(method):
+            def register(path):
+                def decorate(handler):
+                    handlers[(method, path)] = handler
+                    return handler
+                return decorate
+            return register
+        queue = SimpleNamespace(delete_history_item=lambda _: None)
+        server = SimpleNamespace(routes=SimpleNamespace(get=route("GET"), post=route("POST"), delete=route("DELETE")), prompt_queue=queue)
+        thread = SimpleNamespace(is_alive=lambda: True)
+        with tempfile.TemporaryDirectory() as root, patch("extension.managed.bootstrap.Outbox") as box, \
+                patch("extension.managed.bootstrap.install_queue_hook") as install:
+            box.return_value.start.return_value = (None, thread)
+            start(server, root, root, {"COMFY_WEBHOOK_MANAGED_ENABLED": "1",
+                  "COMFY_WEBHOOK_MANAGED_CALLBACKS": "https://receiver.example/callback"}, user_directory=root)
+            self.assertEqual(box.call_args.args[0], str(Path(root)/"comfy-webhook"/"managed-outbox.sqlite"))
+            install.assert_called_once_with(queue, box.return_value, "letsgen_callback_url", frozenset({"https://receiver.example/callback"}), "letsgen-input", "letsgen")
+            response = asyncio.run(handlers[("GET", "/letsgen/capabilities")](None))
+            self.assertEqual(json.loads(response.body), {"callback": 1, "cleanup_ack": 1, "outbox_recovery": 2})
+
+    def test_enabled_mode_requires_callback_allowlist(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(ValueError, "callback allowlist"):
+                start(None, root, root, {"COMFY_WEBHOOK_MANAGED_ENABLED": "1"}, user_directory=root)
 
     def test_configures_capability_and_recovery_routes(self):
         handlers = {}

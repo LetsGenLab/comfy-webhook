@@ -5,9 +5,15 @@ interrupted. Configure its destination in the workflow or API request.
 
 ## Install
 
-Place this repository as one directory inside `ComfyUI/custom_nodes/`. Keep the
-root `__init__.py` and the `extension` directory together, then restart ComfyUI
-once to load the custom node.
+Clone this repository as one directory inside `ComfyUI/custom_nodes/`, then
+restart ComfyUI once to load the custom node:
+
+```sh
+git clone https://github.com/LetsGenLab/comfy-webhook.git ComfyUI/custom_nodes/comfy-webhook
+```
+
+Keep the root `__init__.py` and the `extension` directory together. Update the
+existing directory when upgrading; do not install a second copy.
 
 ## Use the node
 
@@ -116,29 +122,44 @@ Values must be positive; the maximum delay must be at least the initial delay.
 The callback is delivered asynchronously after the event is saved; failure to
 save an event is logged and does not stop ComfyUI from completing the job.
 
-## Optional managed delivery protocol
+## Managed delivery protocol
 
-For an integrating service that requires
-explicit storage and cleanup acknowledgement, an optional managed observer
-can be enabled with the following environment variables before starting ComfyUI:
+For an integrating service that requires explicit storage and cleanup
+acknowledgement, the same plugin can run a global managed observer. It does not
+require a Webhook node in the workflow. Enable it with these environment
+variables before starting ComfyUI:
 
 | Variable | Purpose |
 | --- | --- |
-| `COMFY_WEBHOOK_MANAGED_OUTBOX_PATH` | Absolute SQLite path on a private persistent volume; create its parent directory first. Setting this enables managed mode. |
-| `COMFY_WEBHOOK_MANAGED_CALLBACKS` | Comma-separated exact HTTPS callback URLs allowed for managed jobs; required in managed mode. |
-| `COMFY_WEBHOOK_MANAGED_CALLBACK_FIELD` | Per-job `extra_data` key, default `managed_webhook_url`. Must differ from the generic `webhook_url`. |
-| `COMFY_WEBHOOK_MANAGED_API_PREFIX` | One path segment for capability and recovery endpoints, default `/webhook-managed`. |
-| `COMFY_WEBHOOK_MANAGED_INPUT_PREFIX` | Prefix for owned inputs, default `comfy-input`. |
-| `COMFY_WEBHOOK_MANAGED_OUTPUT_PREFIX` | Prefix for owned MP4 outputs, default `comfy`. |
-| `COMFY_WEBHOOK_MANAGED_SIGNING_KEY` | Optional secret, 32–1024 UTF-8 bytes, used to authenticate managed callbacks. Store it privately and share it only with the receiver. |
+| `COMFY_WEBHOOK_MANAGED_ENABLED` | Set to `1` to start the observer with the defaults below. |
+| `COMFY_WEBHOOK_MANAGED_CALLBACKS` | Comma-separated exact HTTPS callback URLs allowed for managed jobs. Required. |
+| `COMFY_WEBHOOK_MANAGED_SIGNING_KEY` | Optional secret, 32–1024 UTF-8 bytes, for signed callbacks. Store privately and share only with the receiver. |
+| `COMFY_WEBHOOK_MANAGED_OUTBOX_PATH` | Optional absolute SQLite path on a private persistent volume; create its parent directory first. Setting this also enables managed mode. |
+| `COMFY_WEBHOOK_MANAGED_CALLBACK_FIELD` | Per-job `extra_data` key, default `letsgen_callback_url`. |
+| `COMFY_WEBHOOK_MANAGED_API_PREFIX` | One path segment for capability and recovery endpoints, default `/letsgen`. |
+| `COMFY_WEBHOOK_MANAGED_INPUT_PREFIX` | Owned input prefix, default `letsgen-input`. |
+| `COMFY_WEBHOOK_MANAGED_OUTPUT_PREFIX` | Owned MP4 output prefix, default `letsgen`. |
+
+When enabled using `COMFY_WEBHOOK_MANAGED_ENABLED`, the default outbox is
+`comfy-webhook/managed-outbox.sqlite` inside the ComfyUI user directory. The
+user directory must be on persistent storage for callbacks to survive machine
+replacement. An API job supplies an allowlisted callback in
+`extra_data.letsgen_callback_url`. No callback address or credential is stored
+in this repository. Protect the entire ComfyUI API with authentication or a
+private network; the plugin does not add access control to ComfyUI. Callback
+signing also requires verification by the receiving service.
+
+For backwards compatibility, enabling managed mode with an explicit outbox
+path retains its historical defaults (`managed_webhook_url`, `/webhook-managed`,
+`comfy-input`, `comfy`). Set the corresponding variables explicitly if using
+that mode with Lets Gen.
 
 The protocol requires a UUID prompt ID and top-level input names shaped like
 `<input-prefix>-<uuid>-<token>.png` (also `.jpg`, `.jpeg`, or `.webp`), and
-one top-level output named `<output-prefix>-<uuid>_<token>.mp4`. Only the
-allowlisted per-job callback receives events; a job with no allowed callback
-is not enrolled. Managed delivery persists terminal events and retries until
-the receiver confirms the terminal result. After that confirmation it removes
-only the task-owned files and sends a `cleaned` event when the receiver requires
+one top-level output named `<output-prefix>-<uuid>_<token>.mp4`. A job with no
+allowlisted per-job callback is not enrolled. Managed delivery persists
+terminal events and retries until the receiver confirms the terminal result.
+After that confirmation it removes only the task-owned files and sends a `cleaned` event when the receiver requires
 it. Recovery endpoints expose pending events and acknowledgement by exact UUID.
 Unexpected acknowledgement bodies and network errors remain pending.
 
