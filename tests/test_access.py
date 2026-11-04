@@ -57,3 +57,14 @@ class AccessTests(unittest.TestCase):
             finally:
                 await client.close()
         asyncio.run(exercise())
+
+    def test_browser_origin_must_match_the_configured_origin(self):
+        server = SimpleNamespace(app=SimpleNamespace(middlewares=[]))
+        install(server, {"COMFY_WEBHOOK_API_TOKEN": "x" * 32,
+                         "COMFY_WEBHOOK_ALLOWED_ORIGIN": "https://machine.example"})
+        async def handler(_request): return "ok"
+        def request(origin):
+            return SimpleNamespace(headers={"Authorization": "Bearer " + "x" * 32, "Origin": origin})
+        self.assertEqual(asyncio.run(server.app.middlewares[0](request("https://attacker.example"), handler)).status, 403)
+        self.assertEqual(asyncio.run(server.app.middlewares[0](request("null"), handler)).status, 403)
+        self.assertEqual(asyncio.run(server.app.middlewares[0](request("https://machine.example"), handler)), "ok")
