@@ -15,6 +15,13 @@ git clone https://github.com/LetsGenLab/comfy-webhook.git ComfyUI/custom_nodes/c
 Keep the root `__init__.py` and the `extension` directory together. Update the
 existing directory when upgrading; do not install a second copy.
 
+For machines whose startup environment is recreated, settings may instead be
+stored in `comfy-webhook/settings.json` beneath ComfyUI's user directory. The
+file is a JSON object whose keys are `COMFY_WEBHOOK_` environment-variable
+names and whose values are strings. It must be owner-only on POSIX. Place it
+on a private persistent volume, outside the Git checkout; environment
+variables override file settings. Never commit the file or its contents.
+
 ## Protect the server
 
 Set `COMFY_WEBHOOK_API_TOKEN` to a private, randomly generated value of at
