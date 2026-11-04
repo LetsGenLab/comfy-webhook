@@ -15,6 +15,21 @@ git clone https://github.com/LetsGenLab/comfy-webhook.git ComfyUI/custom_nodes/c
 Keep the root `__init__.py` and the `extension` directory together. Update the
 existing directory when upgrading; do not install a second copy.
 
+## Protect the server
+
+Set `COMFY_WEBHOOK_API_TOKEN` to a private, randomly generated value of at
+least 32 UTF-8 bytes before starting ComfyUI to require authentication for the
+entire web server, including workflow submission, output download, WebSocket and
+managed recovery. API clients send `Authorization: Bearer <token>`. A browser
+can sign in using HTTP Basic authentication with username `comfy` and the token
+as its password. Use HTTPS; do not put the token in a URL, workflow, log or Git
+repository. Without the variable, the plugin does not change server access.
+
+Custom-node import failures can prevent this middleware from loading while
+ComfyUI continues to run. Before using a machine, verify that an unauthenticated
+request is rejected and an authenticated request succeeds; use a private
+network or platform access control as an additional protection.
+
 ## Use the node
 
 Add **Webhook** from the `webhook` category to the canvas and enter an HTTP or
