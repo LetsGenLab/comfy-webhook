@@ -24,7 +24,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Outbox:
-    def __init__(self, path, callback, output_root=None, input_root=None, clear_history=None, *, input_prefix, output_prefix, signing_key=None):
+    def __init__(self, path, callback, output_root=None, input_root=None, clear_history=None, *, input_prefix, output_prefix, signing_key=None, signing_keys=None):
         url = urllib.parse.urlsplit(callback)
         if ((callback and (url.scheme != "https" or not url.hostname or url.username or url.password or url.fragment))
                 or not os.path.isabs(path)):
@@ -34,6 +34,11 @@ class Outbox:
         if signing_key is not None and (not isinstance(signing_key, str) or not 32 <= len(signing_key.encode()) <= 1024):
             raise ValueError("Managed webhook signing key must be 32 to 1024 bytes")
         self._signing_key = signing_key.encode() if signing_key is not None else None
+        if signing_keys is not None and (not isinstance(signing_keys, dict) or not signing_keys or any(
+                not isinstance(url, str) or not isinstance(key, str) or not 32 <= len(key.encode()) <= 1024
+                for url, key in signing_keys.items())):
+            raise ValueError("Invalid managed webhook signing keys")
+        self._signing_keys = {url: key.encode() for url, key in signing_keys.items()} if signing_keys is not None else None
         self.clear_history = clear_history
         fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
         os.close(fd)
@@ -45,18 +50,27 @@ class Outbox:
                 db.execute("ALTER TABLE events ADD COLUMN callback TEXT")
             if "input_files" not in {row[1] for row in db.execute("PRAGMA table_info(events)")}:
                 db.execute("ALTER TABLE events ADD COLUMN input_files TEXT")
+            if self._signing_keys is not None:
+                destinations = {row[0] or self.callback for row in db.execute("SELECT DISTINCT callback FROM events")}
+                if not destinations.issubset(self._signing_keys):
+                    raise ValueError("Pending callbacks require their original signing keys")
 
     def connect(self):
         return sqlite3.connect(self.path, timeout=5)
 
     def _request(self, callback, body):
         headers = {"Content-Type": "application/json", "User-Agent": "ComfyUI-Webhook-Managed/1.0"}
-        if self._signing_key is not None:
-            headers["X-Comfy-Webhook-Signature"] = "sha256=" + hmac.new(self._signing_key, body, hashlib.sha256).hexdigest()
+        key = self._signing_key if self._signing_keys is None else self._signing_keys.get(callback)
+        if self._signing_keys is not None and key is None:
+            raise ValueError("Callback has no configured signing key")
+        if key is not None:
+            headers["X-Comfy-Webhook-Signature"] = "sha256=" + hmac.new(key, body, hashlib.sha256).hexdigest()
         return urllib.request.Request(callback, data=body, method="POST", headers=headers)
 
     def add(self, event, callback=None, input_files=()):
         if not callback and not self.callback:
+            return False
+        if self._signing_keys is not None and (callback or self.callback) not in self._signing_keys:
             return False
         body = json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode()
         with self.connect() as db:

@@ -34,6 +34,15 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
     api_prefix = environ.get("COMFY_WEBHOOK_MANAGED_API_PREFIX", "/letsgen" if automatic else "/webhook-managed").strip()
     callbacks = frozenset(x.strip() for x in environ.get("COMFY_WEBHOOK_MANAGED_CALLBACKS", "").split(",") if x.strip())
     signing_key = environ.get("COMFY_WEBHOOK_MANAGED_SIGNING_KEY")
+    signing_keys = None
+    if "COMFY_WEBHOOK_MANAGED_SIGNING_KEYS" in environ:
+        try:
+            signing_keys = json.loads(environ["COMFY_WEBHOOK_MANAGED_SIGNING_KEYS"])
+        except (TypeError, json.JSONDecodeError) as error:
+            raise ValueError("Invalid managed webhook signing keys") from error
+        if (signing_key is not None or not isinstance(signing_keys, dict) or set(signing_keys) != callbacks
+                or any(not isinstance(key, str) or not 32 <= len(key.encode()) <= 1024 for key in signing_keys.values())):
+            raise ValueError("Managed callback keys must match the callback allowlist")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", callback_field):
         raise ValueError("Invalid managed callback field")
     if callback_field == "webhook_url":
@@ -50,14 +59,15 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
             raise ValueError("Invalid managed callback URL")
     queue = server.prompt_queue
     outbox = Outbox(path, "", output_root, input_root, queue.delete_history_item,
-                    input_prefix=input_prefix, output_prefix=output_prefix, signing_key=signing_key)
+                    input_prefix=input_prefix, output_prefix=output_prefix, signing_key=signing_key,
+                    signing_keys=signing_keys)
     install_queue_hook(queue, outbox, callback_field, callbacks, input_prefix, output_prefix)
     stop, thread = outbox.start()
 
     @server.routes.get(api_prefix + "/capabilities")
     async def capabilities(_request):
         capabilities = {"callback": 1 if thread.is_alive() else 0, "cleanup_ack": 1, "outbox_recovery": 2}
-        if signing_key is not None:
+        if signing_key is not None or signing_keys is not None:
             capabilities["callback_signature"] = 1
             capabilities["callback_field"] = callback_field
             capabilities["input_prefix"] = input_prefix
@@ -98,8 +108,10 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
                 if len(body) > 4096:
                     return web.json_response({"error": "too large"}, status=413)
             signature = request.headers.get("X-Comfy-Webhook-Signature", "")
-            if signing_key is None or not isinstance(signature, str) or not re.fullmatch(r"sha256=[0-9a-f]{64}", signature) or not hmac.compare_digest(
-                    signature, "sha256=" + hmac.new(signing_key.encode(), body, hashlib.sha256).hexdigest()):
+            keys = list(signing_keys.values()) if signing_keys is not None else ([signing_key] if signing_key is not None else [])
+            matches = [hmac.compare_digest(signature, "sha256=" + hmac.new(key.encode(), body, hashlib.sha256).hexdigest())
+                       for key in keys] if isinstance(signature, str) and re.fullmatch(r"sha256=[0-9a-f]{64}", signature) else []
+            if not any(matches):
                 return web.json_response({"error": "unauthorized"}, status=401)
             data = json.loads(body)
             if not isinstance(data, dict) or set(data) != {"files"}:
