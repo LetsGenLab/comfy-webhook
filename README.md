@@ -162,6 +162,7 @@ variables before starting ComfyUI:
 | `COMFY_WEBHOOK_MANAGED_ENABLED` | Set to `1` to start the observer with the defaults below. |
 | `COMFY_WEBHOOK_MANAGED_CALLBACKS` | Comma-separated exact HTTPS callback URLs allowed for managed jobs. Required. |
 | `COMFY_WEBHOOK_MANAGED_SIGNING_KEY` | Optional secret, 32–1024 UTF-8 bytes, for signed callbacks. Store privately and share only with the receiver. |
+| `COMFY_WEBHOOK_MANAGED_SIGNING_KEYS` | Optional JSON object mapping every allowlisted callback URL to its own 32–1024 byte secret. Use instead of the single signing key when callbacks have different receivers. |
 | `COMFY_WEBHOOK_MANAGED_OUTBOX_PATH` | Optional absolute SQLite path on a private persistent volume; create its parent directory first. Setting this also enables managed mode. |
 | `COMFY_WEBHOOK_MANAGED_CALLBACK_FIELD` | Per-job `extra_data` key, default `letsgen_callback_url`. |
 | `COMFY_WEBHOOK_MANAGED_API_PREFIX` | One path segment for capability and recovery endpoints, default `/letsgen`. |
@@ -176,6 +177,13 @@ replacement. An API job supplies an allowlisted callback in
 in this repository. Protect the entire ComfyUI API with authentication or a
 private network; the plugin does not add access control to ComfyUI. Callback
 signing also requires verification by the receiving service.
+
+For multiple receivers, the per-callback signing map must contain exactly the
+allowlisted URLs. Store the JSON map as a string in the owner-only settings
+file, remove the single-key setting, and retain every key needed by pending
+outbox events. Startup rejects an incomplete map or pending callback without a
+key. Staged-input cleanup accepts a valid signature from any configured key;
+the shared machine API credential and task-specific filename checks still apply.
 
 For backwards compatibility, enabling managed mode with an explicit outbox
 path retains its historical defaults (`managed_webhook_url`, `/webhook-managed`,

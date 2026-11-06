@@ -118,6 +118,68 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(capability['callback_url_hashes'], [hashlib.sha256(b'https://receiver.example/callback').hexdigest()])
             self.assertIn(('POST', '/webhook-managed/staged/{prompt_id}/cleanup'), handlers)
 
+    def test_distinct_callback_keys_require_a_complete_exact_allowlist(self):
+        callbacks = ['https://staging.example/callback', 'https://prod.example/callback']
+        keys = {callbacks[0]: 's' * 32, callbacks[1]: 'p' * 32}
+        handlers = {}
+        def route(method):
+            def register(path):
+                def decorate(handler):
+                    handlers[(method, path)] = handler
+                    return handler
+                return decorate
+            return register
+        server = SimpleNamespace(routes=SimpleNamespace(get=route('GET'), post=route('POST'), delete=route('DELETE')),
+                                 prompt_queue=SimpleNamespace(delete_history_item=lambda _: None))
+        with tempfile.TemporaryDirectory() as root, patch('extension.managed.bootstrap.Outbox') as box, \
+                patch('extension.managed.bootstrap.install_queue_hook'):
+            box.return_value.start.return_value = (None, SimpleNamespace(is_alive=lambda: True))
+            env = {'COMFY_WEBHOOK_MANAGED_ENABLED': '1', 'COMFY_WEBHOOK_MANAGED_CALLBACKS': ','.join(callbacks),
+                   'COMFY_WEBHOOK_MANAGED_SIGNING_KEYS': json.dumps(keys)}
+            start(server, root, root, env, user_directory=root)
+            self.assertEqual(box.call_args.kwargs['signing_keys'], keys)
+            capability = json.loads(asyncio.run(handlers[('GET', '/letsgen/capabilities')](None)).body)
+            self.assertEqual(capability['callback_signature'], 1)
+            self.assertEqual(capability['callback_url_hashes'], sorted(hashlib.sha256(x.encode()).hexdigest() for x in callbacks))
+            for invalid in ({callbacks[0]: keys[callbacks[0]]}, {**keys, 'https://other.example/callback': 'x' * 32},
+                            {**keys, callbacks[0]: 'short'}):
+                with self.assertRaises(ValueError):
+                    start(server, root, root, {**env, 'COMFY_WEBHOOK_MANAGED_SIGNING_KEYS': json.dumps(invalid)}, user_directory=root)
+            with self.assertRaises(ValueError):
+                start(server, root, root, {**env, 'COMFY_WEBHOOK_MANAGED_SIGNING_KEY': 'a' * 32}, user_directory=root)
+
+    def test_multi_receiver_staged_cleanup_accepts_either_key(self):
+        handlers = {}
+        def route(method):
+            def register(path):
+                def decorate(handler):
+                    handlers[(method, path)] = handler
+                    return handler
+                return decorate
+            return register
+        server = SimpleNamespace(routes=SimpleNamespace(get=route('GET'), post=route('POST'), delete=route('DELETE')),
+                                 prompt_queue=SimpleNamespace(delete_history_item=lambda _: None))
+        class Content:
+            async def iter_chunked(self, _size):
+                yield b'{"files":[]}'
+        with tempfile.TemporaryDirectory() as root, patch('extension.managed.bootstrap.Outbox') as box, \
+                patch('extension.managed.bootstrap.install_queue_hook'):
+            box.return_value.start.return_value = (None, SimpleNamespace(is_alive=lambda: True))
+            box.return_value.cleanup_staged.return_value = True
+            callbacks = ['https://staging.example/callback', 'https://prod.example/callback']
+            keys = ['s' * 32, 'p' * 32]
+            env = {'COMFY_WEBHOOK_MANAGED_ENABLED':'1', 'COMFY_WEBHOOK_MANAGED_CALLBACKS':','.join(callbacks),
+                   'COMFY_WEBHOOK_MANAGED_SIGNING_KEYS':json.dumps(dict(zip(callbacks, keys)))}
+            start(server, root, root, env, user_directory=root)
+            handler = handlers[('POST', '/letsgen/staged/{prompt_id}/cleanup')]
+            def check(key):
+                signature = 'sha256=' + hmac.new(key.encode(), b'{"files":[]}', hashlib.sha256).hexdigest()
+                request = SimpleNamespace(content_length=None, content=Content(),
+                    headers={'X-Comfy-Webhook-Signature': signature}, match_info={'prompt_id':'00000000-0000-4000-8000-000000000001'})
+                return asyncio.run(handler(request)).status
+            self.assertEqual([check(key) for key in keys], [200, 200])
+            self.assertEqual(check('x' * 32), 401)
+
     def test_staged_cleanup_requires_signature_and_reads_full_chunked_body(self):
         handlers = {}
         def route(method):

@@ -180,6 +180,24 @@ class DeliveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '32 to 1024'):
                 Outbox(str(Path(tmp) / 'bad.sqlite'), 'https://example.com/hook', signing_key='short')
 
+    def test_each_callback_uses_its_own_key_and_existing_events_keep_their_destination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / 'events.sqlite')
+            staging, production = 'https://staging.example/callback', 'https://prod.example/callback'
+            keys = {staging: 's' * 32, production: 'p' * 32}
+            box = _Outbox(path, '', input_prefix='letsgen-input', output_prefix='letsgen', signing_keys=keys)
+            for url, key in keys.items():
+                request = box._request(url, b'{}')
+                self.assertEqual(request.get_header('X-comfy-webhook-signature'),
+                                 'sha256=' + hmac.new(key.encode(), b'{}', hashlib.sha256).hexdigest())
+                event_id = str(uuid.uuid4())
+                box.add({'version': 1, 'deliveryId': event_id, 'promptId': event_id, 'status': 'failed'}, callback=url)
+            with self.assertRaises(ValueError):
+                box._request('https://unknown.example/callback', b'{}')
+            with self.assertRaisesRegex(ValueError, 'Pending callbacks'):
+                _Outbox(path, '', input_prefix='letsgen-input', output_prefix='letsgen', signing_keys={staging: keys[staging]})
+            _Outbox(path, '', input_prefix='letsgen-input', output_prefix='letsgen', signing_keys=keys)
+
     def test_a_slow_callback_does_not_block_another_event(self):
         with tempfile.TemporaryDirectory() as tmp:
             box = Outbox(str(Path(tmp) / "events.sqlite"), "https://example.com/hook")
