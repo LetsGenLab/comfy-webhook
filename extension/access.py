@@ -24,7 +24,14 @@ def install(server, environ=os.environ):
     @web.middleware
     async def authenticate(request, handler):
         origin = request.headers.get("Origin")
-        if origin is not None and (not allowed_origin or origin != allowed_origin):
+        # Built frontend assets are immutable files. Their URL can change when
+        # a machine image is moved to another host, so do not bind them to a
+        # configured browser origin. Authentication still applies below.
+        path = getattr(request, "path", "")
+        static_asset = (getattr(request, "method", "") in ("GET", "HEAD")
+                        and path.startswith("/assets/")
+                        and all(part not in (".", "..") for part in path.split("/")))
+        if origin is not None and not static_asset and (not allowed_origin or origin != allowed_origin):
             return web.Response(status=403)
         header = request.headers.get("Authorization", "")
         candidate = b""

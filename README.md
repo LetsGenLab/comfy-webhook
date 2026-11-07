@@ -35,8 +35,11 @@ repository. Without the variable, the plugin does not change server access.
 For browser access, set `COMFY_WEBHOOK_ALLOWED_ORIGIN` to the exact public
 HTTPS origin, without a trailing slash. With a token enabled, requests that
 carry any other `Origin` are rejected, even if ComfyUI's CORS settings are
-permissive. If this setting is absent, all requests carrying an `Origin`
-header are denied. API clients that omit `Origin` are unaffected.
+permissive. Authenticated `GET` and `HEAD` requests for built `/assets/` files
+do not depend on the configured origin. API and WebSocket requests still use
+the origin check because browsers may automatically send cached Basic credentials
+from another website. If this setting is absent, other requests carrying an
+`Origin` header are denied. API clients that omit `Origin` are unaffected.
 
 Custom-node import failures can prevent this middleware from loading while
 ComfyUI continues to run. Before using a machine, verify that an unauthenticated
