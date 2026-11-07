@@ -68,3 +68,20 @@ class AccessTests(unittest.TestCase):
         self.assertEqual(asyncio.run(server.app.middlewares[0](request("https://attacker.example"), handler)).status, 403)
         self.assertEqual(asyncio.run(server.app.middlewares[0](request("null"), handler)).status, 403)
         self.assertEqual(asyncio.run(server.app.middlewares[0](request("https://machine.example"), handler)), "ok")
+
+    def test_authenticated_static_assets_do_not_depend_on_a_fixed_browser_origin(self):
+        server = SimpleNamespace(app=SimpleNamespace(middlewares=[]))
+        token = "x" * 32
+        install(server, {"COMFY_WEBHOOK_API_TOKEN": token,
+                         "COMFY_WEBHOOK_ALLOWED_ORIGIN": "https://old-machine.example"})
+        async def handler(_request): return "ok"
+        def request(path, method, auth=True):
+            headers = {"Origin": "https://new-machine.example"}
+            if auth: headers["Authorization"] = "Bearer " + token
+            return SimpleNamespace(headers=headers, path=path, method=method)
+        middleware = server.app.middlewares[0]
+        self.assertEqual(asyncio.run(middleware(request("/assets/app.js", "GET"), handler)), "ok")
+        self.assertEqual(asyncio.run(middleware(request("/assets/app.css", "HEAD"), handler)), "ok")
+        self.assertEqual(asyncio.run(middleware(request("/assets/app.js", "GET", False), handler)).status, 401)
+        for path, method in [("/prompt", "POST"), ("/assets/app.js", "POST"), ("/assets/../prompt", "GET")]:
+            self.assertEqual(asyncio.run(middleware(request(path, method), handler)).status, 403)
