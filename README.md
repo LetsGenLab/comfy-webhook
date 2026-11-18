@@ -15,6 +15,49 @@ git clone https://github.com/LetsGenLab/comfy-webhook.git ComfyUI/custom_nodes/c
 Keep the root `__init__.py` and the `extension` directory together. Update the
 existing directory when upgrading; do not install a second copy.
 
+### Run at machine startup
+
+Run the following before ComfyUI starts, as the same OS user that runs
+ComfyUI. The installer needs Git and Python 3.10+ on Linux. Set
+`WEBHOOK_REVISION` to the full SHA of a reviewed commit containing `install.py`
+and `COMFYUI_DIR` to the directory containing ComfyUI's `main.py`.
+
+```sh
+set -eu
+installer="$(mktemp)"
+trap 'rm -f "$installer"' EXIT
+curl --fail --silent --show-error --location --connect-timeout 10 --max-time 60 \
+  "https://raw.githubusercontent.com/LetsGenLab/comfy-webhook/${WEBHOOK_REVISION}/install.py" \
+  --output "$installer"
+python3 "$installer" "$WEBHOOK_REVISION"
+```
+
+Supply settings through the machine's private environment:
+
+| Variable | What to set |
+| --- | --- |
+| `COMFYUI_USER_DIR` | The same directory used by ComfyUI's `--user-directory`, if set. Defaults to `user` under `COMFYUI_DIR`. |
+| `COMFY_WEBHOOK_API_TOKEN` | The bearer token used by Lets Gen or your API client. On the first install, an omitted token is generated and stored in the private settings file. |
+| `COMFY_WEBHOOK_BASIC_PASSWORD` | Optional independent password for the browser user `comfy`. With no override, the browser uses the API token. Set this to `comfy` only for a machine already gated by a trusted private network or authenticated proxy. Use a strong, unique password for an internet-facing origin. |
+| `COMFY_WEBHOOK_ALLOWED_ORIGIN` | The exact HTTPS origin of the ComfyUI browser UI, including the port if applicable. |
+
+The installer merges supplied settings into `<user-directory>/comfy-webhook/settings.json`
+with mode `0600`. Reruns preserve saved settings and outboxes. To change the
+browser password, update the startup environment, rerun the installer and
+restart ComfyUI. Keep the settings directory on storage owned by the ComfyUI
+user. After startup, verify that an unauthenticated request to `/system_stats`
+returns `401` and that both bearer and browser authentication succeed.
+
+For Lets Gen managed callbacks, also set `COMFY_WEBHOOK_MANAGED_ENABLED=1`
+and set `COMFY_WEBHOOK_MANAGED_CALLBACKS` to the exact callback URL for the
+target environment. Supply the receiver's signing configuration where required.
+Prefer a persistent user directory. When setting a separate
+`COMFY_WEBHOOK_MANAGED_OUTBOX_PATH`, set the callback field to
+`letsgen_callback_url`, API prefix to `/letsgen`, input prefix to
+`letsgen-input`, and output prefix to `letsgen` through the managed variables
+below. Keep the ordinary workflow Webhook node disabled for managed jobs.
+Check authenticated `/letsgen/capabilities` before assigning work.
+
 For machines whose startup environment is recreated, settings may instead be
 stored in `comfy-webhook/settings.json` beneath ComfyUI's user directory. The
 file is a JSON object whose keys are `COMFY_WEBHOOK_` environment-variable
@@ -28,8 +71,9 @@ Set `COMFY_WEBHOOK_API_TOKEN` to a private, randomly generated value of at
 least 32 UTF-8 bytes before starting ComfyUI to require authentication for the
 entire web server, including workflow submission, output download, WebSocket and
 managed recovery. API clients send `Authorization: Bearer <token>`. A browser
-can sign in using HTTP Basic authentication with username `comfy` and the token
-as its password. Use HTTPS; do not put the token in a URL, workflow, log or Git
+can sign in using HTTP Basic authentication with username `comfy` and
+`COMFY_WEBHOOK_BASIC_PASSWORD` if configured, or the token otherwise.
+Use HTTPS; do not put credentials in a URL, workflow, log or Git
 repository. Without the variable, the plugin does not change server access.
 
 For browser access, set `COMFY_WEBHOOK_ALLOWED_ORIGIN` to the exact public
@@ -178,7 +222,7 @@ user directory must be on persistent storage for callbacks to survive machine
 replacement. An API job supplies an allowlisted callback in
 `extra_data.letsgen_callback_url`. No callback address or credential is stored
 in this repository. Protect the entire ComfyUI API with authentication or a
-private network; the plugin does not add access control to ComfyUI. Callback
+private network. Callback
 signing also requires verification by the receiving service.
 
 For multiple receivers, the per-callback signing map must contain exactly the
