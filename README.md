@@ -18,24 +18,32 @@ existing directory when upgrading; do not install a second copy.
 ### Run at machine startup
 
 Run the following before ComfyUI starts, as the same OS user that runs
-ComfyUI. The installer needs Git and Python 3.10+ on Linux. Set
-`WEBHOOK_REVISION` to the full SHA of a reviewed commit containing `install.py`
-and `COMFYUI_DIR` to the directory containing ComfyUI's `main.py`.
+ComfyUI. The installer needs Bash, curl, Git, and Python 3.10+ on Linux.
+Put the signing key and, for an existing pool, the bearer token in the
+machine's private startup environment. For example, a Lets Gen staging machine
+can use:
 
-```sh
-set -eu
-installer="$(mktemp)"
-trap 'rm -f "$installer"' EXIT
-curl --fail --silent --show-error --location --connect-timeout 10 --max-time 60 \
-  "https://raw.githubusercontent.com/LetsGenLab/comfy-webhook/${WEBHOOK_REVISION}/install.py" \
-  --output "$installer"
-python3 "$installer" "$WEBHOOK_REVISION"
+```bash
+set -o pipefail
+export COMFYUI_DIR=/root/ComfyUI
+export COMFYUI_PYTHON=/root/miniconda3/bin/python3
+export COMFY_WEBHOOK_MANAGED_CALLBACKS=https://staging.letschat.cc/api/providers/comfy/callback
+curl -fsSL --connect-timeout 10 --max-time 60 \
+  https://raw.githubusercontent.com/LetsGenLab/comfy-webhook/main/install.sh | bash
 ```
+
+Adding a callback URL enables managed mode by default. The script resolves
+the latest commit on `main` once, downloads its installer, and installs that
+same commit. To keep a known version across boots, set `WEBHOOK_REVISION` to
+its full commit SHA and fetch `install.sh` from that commit. Start ComfyUI
+through its normal launcher after the script exits successfully.
 
 Supply settings through the machine's private environment:
 
 | Variable | What to set |
 | --- | --- |
+| `COMFYUI_DIR` | The directory containing ComfyUI's `main.py`. Defaults to the working directory. |
+| `COMFYUI_PYTHON` | Python used by `install.sh`. Defaults to `python3`. |
 | `COMFYUI_USER_DIR` | The same directory used by ComfyUI's `--user-directory`, if set. Defaults to `user` under `COMFYUI_DIR`. |
 | `COMFY_WEBHOOK_API_TOKEN` | The bearer token used by Lets Gen or your API client. On the first install, an omitted token is generated and stored in the private settings file. |
 | `COMFY_WEBHOOK_BASIC_PASSWORD` | Optional independent password for the browser user `comfy`. With no override, the browser uses the API token. Set this to `comfy` only for a machine already gated by a trusted private network or authenticated proxy. Use a strong, unique password for an internet-facing origin. |
