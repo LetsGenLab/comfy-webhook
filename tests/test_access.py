@@ -43,6 +43,30 @@ class AccessTests(unittest.TestCase):
             result = asyncio.run(server.app.middlewares[0](SimpleNamespace(headers={"Authorization": "Bearer " + token}), handler))
             self.assertEqual(result.status, 401)
 
+    def test_browser_password_override_is_independent_of_api_token(self):
+        server = SimpleNamespace(app=SimpleNamespace(middlewares=[]))
+        token = "t" * 32
+        install(server, {
+            "COMFY_WEBHOOK_API_TOKEN": token,
+            "COMFY_WEBHOOK_BASIC_PASSWORD": "comfy",
+        })
+        middleware = server.app.middlewares[0]
+
+        async def handler(_request):
+            return web.Response()
+
+        def status(header):
+            request = SimpleNamespace(headers={"Authorization": header})
+            return asyncio.run(middleware(request, handler)).status
+
+        def basic(password):
+            return "Basic " + base64.b64encode(f"comfy:{password}".encode()).decode()
+
+        self.assertEqual(status("Bearer " + token), 200)
+        self.assertEqual(status(basic("comfy")), 200)
+        self.assertEqual(status(basic(token)), 401)
+        self.assertEqual(status("Bearer comfy"), 401)
+
     def test_real_server_rejects_unauthenticated_requests(self):
         async def exercise():
             app = web.Application()
