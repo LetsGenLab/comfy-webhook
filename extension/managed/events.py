@@ -45,8 +45,8 @@ def event_from_completion(prompt_id, status, history, output_prefix):
                 event["error"] = detail
                 break
     # Keep the provider's own outputs ahead of previews. ComfyUI can report
-    # many intermediate files before the final video, and the receiver needs
-    # the video descriptor to persist it before acknowledging cleanup.
+    # many intermediate files before the final media, and the receiver needs
+    # the output descriptor to persist it before acknowledging cleanup.
     priority_files, other_files = [], []
     outputs = history.get("outputs", {}) if isinstance(history, dict) else {}
     if kind == "succeeded" and isinstance(outputs, dict):
@@ -68,7 +68,7 @@ def event_from_completion(prompt_id, status, history, output_prefix):
                         continue
                     item = {"nodeId": str(node_id), "group": str(group),
                             "filename": name, "subfolder": subfolder, "type": location}
-                    target = priority_files if name.startswith(f"{output_prefix}-{prompt_id}_") and name.endswith(".mp4") else other_files
+                    target = priority_files if name.startswith(f"{output_prefix}-{prompt_id}_") and name.endswith((".mp4", ".png")) else other_files
                     if len(target) < 32:
                         target.append(item)
     event["outputs"] = (priority_files + other_files)[:32]
