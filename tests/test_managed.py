@@ -548,6 +548,23 @@ class DeliveryTests(unittest.TestCase):
             with sqlite3.connect(path) as db:
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM events").fetchone(), (0,))
 
+    def test_managed_cleanup_deletes_the_acknowledged_png_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prompt_id = str(uuid.uuid4())
+            output = root / f"comfy-{prompt_id}_00001_.png"
+            unrelated = root / "unrelated.png"
+            output.write_bytes(b"image")
+            unrelated.write_bytes(b"other")
+            box = _Outbox(str(root / "outbox.sqlite"), "", output_root=str(root),
+                          input_prefix="comfy-input", output_prefix="comfy")
+            box.cleanup_output({"promptId": prompt_id, "outputs": [
+                {"nodeId": "9", "group": "images", "filename": output.name, "subfolder": "", "type": "output"},
+                {"nodeId": "9", "group": "images", "filename": unrelated.name, "subfolder": "", "type": "output"},
+            ]})
+            self.assertFalse(output.exists())
+            self.assertTrue(unrelated.exists())
+
     def test_fasth3_cleanup_deletes_only_acknowledged_video(self):
         with tempfile.TemporaryDirectory() as tmp:
             prompt_id = str(uuid.uuid4())

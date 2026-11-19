@@ -260,14 +260,14 @@ class Outbox:
             return True
 
     def cleanup_output(self, event):
-        """Delete only the acknowledged task video, never unrelated UI files."""
+        """Delete only the acknowledged task output, never unrelated UI files."""
         prompt_id = event.get("promptId", "")
         if not self.output_root or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", prompt_id):
             raise ValueError("Invalid cleanup identity")
         files = [item for item in event.get("outputs", []) if isinstance(item, dict)
                  and item.get("type") == "output" and item.get("subfolder", "") == ""
                  and isinstance(item.get("filename"), str)
-                 and re.fullmatch(re.escape(self.output_prefix) + r"-" + re.escape(prompt_id) + r"_[A-Za-z0-9_-]+\.mp4", item["filename"])]
+                 and re.fullmatch(re.escape(self.output_prefix) + r"-" + re.escape(prompt_id) + r"_[A-Za-z0-9_-]+\.(?:mp4|png)", item["filename"])]
         if len(files) != 1:
             raise ValueError("Invalid cleanup output")
         with _open_folder(os.path.realpath(self.output_root), "") as (root_fd, directory):

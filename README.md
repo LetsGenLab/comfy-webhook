@@ -27,7 +27,8 @@ can use:
 set -o pipefail
 export COMFYUI_DIR=/root/ComfyUI
 export COMFYUI_PYTHON=/root/miniconda3/bin/python3
-export COMFY_WEBHOOK_MANAGED_CALLBACKS=https://staging.letschat.cc/api/providers/comfy/callback
+export COMFY_WEBHOOK_API_TOKEN="${COMFY_WEBHOOK_API_TOKEN:?Set your private API token}"
+export COMFY_WEBHOOK_MANAGED_CALLBACKS=https://receiver.example/callback
 curl -fsSL --connect-timeout 10 --max-time 60 \
   https://raw.githubusercontent.com/LetsGenLab/comfy-webhook/main/install.sh | bash
 ```
@@ -222,7 +223,7 @@ variables before starting ComfyUI:
 | `COMFY_WEBHOOK_MANAGED_CALLBACK_FIELD` | Per-job `extra_data` key, default `letsgen_callback_url`. |
 | `COMFY_WEBHOOK_MANAGED_API_PREFIX` | One path segment for capability and recovery endpoints, default `/letsgen`. |
 | `COMFY_WEBHOOK_MANAGED_INPUT_PREFIX` | Owned input prefix, default `letsgen-input`. |
-| `COMFY_WEBHOOK_MANAGED_OUTPUT_PREFIX` | Owned MP4 output prefix, default `letsgen`. |
+| `COMFY_WEBHOOK_MANAGED_OUTPUT_PREFIX` | Owned media output prefix, default `letsgen`. |
 
 When enabled using `COMFY_WEBHOOK_MANAGED_ENABLED`, the default outbox is
 `comfy-webhook/managed-outbox.sqlite` inside the ComfyUI user directory. The
@@ -247,7 +248,8 @@ that mode with Lets Gen.
 
 The protocol requires a UUID prompt ID and top-level input names shaped like
 `<input-prefix>-<uuid>-<token>.png` (also `.jpg`, `.jpeg`, or `.webp`), and
-one top-level output named `<output-prefix>-<uuid>_<token>.mp4`. A job with no
+one top-level output named `<output-prefix>-<uuid>_<token>.mp4` or
+`<output-prefix>-<uuid>_<token>.png`. A job with no
 allowlisted per-job callback is not enrolled. Managed delivery persists
 terminal events and retries until the receiver confirms the terminal result.
 After that confirmation it removes only the task-owned files and sends a `cleaned` event when the receiver requires
