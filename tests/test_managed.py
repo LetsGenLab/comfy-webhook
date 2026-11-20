@@ -402,6 +402,14 @@ class DeliveryTests(unittest.TestCase):
             other = f"sample-input-{other_id}-other.png"
             (input_root / other).write_bytes(b"other")
             graph = {str(i): {"class_type": "LoadImage", "inputs": {"image": name}} for i, name in enumerate(inputs + [other, "../user.png"])}
+            audio_files = [f"sample-input-{prompt_id}-audio-{i}.wav" for i in range(3)]
+            for i, name in enumerate(audio_files, 50):
+                (input_root / name).write_bytes(b"audio")
+                graph[str(i)] = {"class_type": "LoadAudio", "inputs": {"audio": name}}
+            foreign_audio = f"sample-input-{other_id}-other.wav"
+            (input_root / foreign_audio).write_bytes(b"other audio")
+            graph["60"] = {"class_type": "LoadAudio", "inputs": {"audio": foreign_audio}}
+            inputs.extend(audio_files)
             self.assertEqual(owned_input_files(prompt_id, graph), sorted(inputs))
             video = output_root / f"sample-{prompt_id}_00001_.mp4"
             video.write_bytes(b"video")
@@ -438,6 +446,7 @@ class DeliveryTests(unittest.TestCase):
             self.assertTrue(restored.deliver_one(now=102, opener=Delivered()))
             self.assertTrue(all(not (input_root / name).exists() for name in inputs))
             self.assertTrue((input_root / other).exists())
+            self.assertTrue((input_root / foreign_audio).exists())
             with sqlite3.connect(path) as db: self.assertEqual(db.execute("SELECT COUNT(*) FROM events").fetchone(), (0,))
 
     def test_ignored_callback_is_retried_after_restart_before_failed_job_cleans_inputs(self):

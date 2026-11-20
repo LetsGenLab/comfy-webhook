@@ -74,6 +74,7 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
             capabilities["output_prefix"] = output_prefix
             capabilities["callback_url_hashes"] = sorted(hashlib.sha256(url.encode()).hexdigest() for url in callbacks)
             capabilities["staged_cleanup"] = 1
+            capabilities["reference_audio_cleanup"] = 1
         return web.json_response(capabilities)
 
     @server.routes.get(api_prefix + "/outbox/{prompt_id}")

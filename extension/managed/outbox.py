@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 
 from ..cleanup import _open_folder, _remove_file
+from .events import INPUT_LOADER_FIELDS, MAX_MANAGED_INPUTS, owned_input_pattern
 
 LOG = logging.getLogger("comfy-webhook-managed")
 
@@ -231,9 +232,9 @@ class Outbox:
     def cleanup_inputs(self, prompt_id, files):
         if not files:
             return
-        pattern = re.compile(re.escape(self.input_prefix) + r"-" + re.escape(prompt_id) + r"-[A-Za-z0-9_-]{1,100}\.(?:png|jpg|jpeg|webp)")
+        pattern = owned_input_pattern(prompt_id, self.input_prefix, "|".join(types for _, types in INPUT_LOADER_FIELDS.values()))
         if (not self.input_root or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", prompt_id)
-                or not isinstance(files, list) or len(files) > 9 or any(not isinstance(name, str) or not pattern.fullmatch(name) for name in files)):
+                or not isinstance(files, list) or len(files) > MAX_MANAGED_INPUTS or any(not isinstance(name, str) or not pattern.fullmatch(name) for name in files)):
             raise ValueError("Invalid cleanup inputs")
         with _open_folder(os.path.realpath(self.input_root), "") as (root_fd, directory):
             for name in files:
@@ -245,7 +246,7 @@ class Outbox:
     def cleanup_staged(self, prompt_id, files, queue):
         """Remove explicitly owned inputs only while this prompt is not queued or running."""
         if (not isinstance(prompt_id, str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", prompt_id)
-                or not isinstance(files, list) or len(files) > 9):
+                or not isinstance(files, list) or len(files) > MAX_MANAGED_INPUTS):
             raise ValueError("Invalid staged cleanup request")
         with queue.mutex:
             pending, running = getattr(queue, "queue", None), getattr(queue, "currently_running", None)

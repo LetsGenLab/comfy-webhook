@@ -7,19 +7,34 @@ import re
 LOG = logging.getLogger("comfy-webhook-managed")
 
 
+INPUT_LOADER_FIELDS = {"LoadImage": ("image", "png|jpg|jpeg|webp"), "LoadAudio": ("audio", "mp3|wav|m4a|ogg|webm")}
+MAX_MANAGED_INPUTS = 12
+
+
+def owned_input_pattern(prompt_id, prefix, extensions):
+    return re.compile(re.escape(prefix) + r"-" + re.escape(prompt_id) + r"-[A-Za-z0-9_-]{1,100}\.(?:" + extensions + ")")
+
+
 def owned_input_files(prompt_id, graph, input_prefix):
     """Collect only this API job's uniquely named top-level uploads."""
     if not isinstance(prompt_id, str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", prompt_id) or not isinstance(graph, dict):
         return []
-    pattern = re.compile(re.escape(input_prefix) + r"-" + re.escape(prompt_id) + r"-[A-Za-z0-9_-]{1,100}\.(?:png|jpg|jpeg|webp)")
-    names = set()
+    patterns = {node: (field, owned_input_pattern(prompt_id, input_prefix, types))
+                for node, (field, types) in INPUT_LOADER_FIELDS.items()}
+    names = {"LoadImage": set(), "LoadAudio": set()}
     for node in graph.values():
-        if not isinstance(node, dict) or node.get("class_type") != "LoadImage" or not isinstance(node.get("inputs"), dict):
+        if not isinstance(node, dict) or not isinstance(node.get("class_type"), str) or not isinstance(node.get("inputs"), dict):
             continue
-        name = node["inputs"].get("image")
+        node_type = node["class_type"]
+        if node_type not in patterns:
+            continue
+        field, pattern = patterns[node_type]
+        name = node["inputs"].get(field)
         if isinstance(name, str) and pattern.fullmatch(name):
-            names.add(name)
-    return sorted(names) if len(names) <= 9 else []
+            names[node_type].add(name)
+    if len(names["LoadImage"]) > 9 or len(names["LoadAudio"]) > 3:
+        return []
+    return sorted(names["LoadImage"] | names["LoadAudio"])
 
 
 def event_from_completion(prompt_id, status, history, output_prefix):
