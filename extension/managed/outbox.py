@@ -17,7 +17,7 @@ from ..outbox import validate_url
 from .events import INPUT_LOADER_FIELDS, MAX_MANAGED_INPUTS, owned_input_pattern
 
 LOG = logging.getLogger("comfy-webhook-managed")
-CALLBACK_TIMEOUT_SECONDS = 5
+CALLBACK_TIMEOUT_SECONDS = 30
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
