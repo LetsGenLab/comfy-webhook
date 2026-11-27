@@ -11,7 +11,7 @@ import uuid
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from extension.managed.events import event_from_completion as _event, install_queue_hook as _install, owned_input_files as _owned
 from extension.managed.outbox import Outbox as _Outbox
 
@@ -22,7 +22,7 @@ def owned_input_files(prompt_id, graph):
     return _owned(prompt_id, graph, "sample-input")
 
 def install_queue_hook(queue, outbox):
-    return _install(queue, outbox, "managed_callback_url", {"https://receiver.example/callback"}, "sample-input", "sample")
+    return _install(queue, outbox, "managed_callback_url", "sample-input", "sample")
 
 class Outbox(_Outbox):
     def __init__(self, *args, **kwargs):
@@ -117,16 +117,6 @@ class EventTests(unittest.TestCase):
             with sqlite3.connect(path) as db:
                 self.assertEqual(db.execute("SELECT id FROM events").fetchall(), [("job-1",)])
 
-    def test_untrusted_callback_address_is_not_used(self):
-        recorded = []
-        class Queue:
-            mutex = threading.Lock()
-            currently_running = {1: (0, "job-1", {}, {"managed_callback_url": "https://attacker.example/"})}
-            def task_done(self, *args, **kwargs): return "completed"
-        queue = Queue()
-        install_queue_hook(queue, SimpleNamespace(add=lambda event, callback, inputs: recorded.append(callback)))
-        queue.task_done(1, {}, SimpleNamespace(status_str="error", messages=[]))
-        self.assertEqual(recorded, [None])
 
 
 class DeliveryTests(unittest.TestCase):
@@ -197,6 +187,38 @@ class DeliveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Pending callbacks'):
                 _Outbox(path, '', input_prefix='letsgen-input', output_prefix='letsgen', signing_keys={staging: keys[staging]})
             _Outbox(path, '', input_prefix='letsgen-input', output_prefix='letsgen', signing_keys=keys)
+
+    def test_job_supplied_destination_is_delivered_with_default_or_override_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / 'events.sqlite')
+            default = 'd' * 32
+            override = 's' * 32
+            staging = 'https://staging.example/callback'
+            box = Outbox(path, '', signing_key=default, signing_keys={staging: override}, api_token_signing=True)
+            queue = SimpleNamespace(mutex=threading.Lock(), currently_running={},
+                                    task_done=lambda *args, **kwargs: None)
+            install_queue_hook(queue, box)
+            status = SimpleNamespace(status_str='error', messages=[])
+            for url, key in ((staging, override), ('https://other.example/callback', default)):
+                prompt_id = str(uuid.uuid4())
+                queue.currently_running[1] = (0, prompt_id, {}, {'managed_callback_url': url})
+                queue.task_done(1, {}, status)
+                receiver = SimpleNamespace(open=MagicMock())
+                response = receiver.open.return_value.__enter__.return_value
+                response.status = 200
+                response.read.return_value = b'{"accepted":true,"status":"failed"}'
+                self.assertTrue(box.deliver_one(now=100, opener=receiver))
+                request = receiver.open.call_args.args[0]
+                self.assertEqual(request.full_url, url)
+                self.assertEqual(json.loads(request.data)['promptId'], prompt_id)
+                scheme = 'sha256' if url == staging else 'sha256-api-token'
+                self.assertEqual(request.get_header('X-comfy-webhook-signature'),
+                                 scheme + '=' + hmac.new(key.encode(), request.data, hashlib.sha256).hexdigest())
+            for url in (None, [], 'http://other.example/callback', 'https://user@other.example/callback'):
+                queue.currently_running[1] = (0, str(uuid.uuid4()), {}, {'managed_callback_url': url})
+                queue.task_done(1, {}, status)
+            self.assertFalse(box.deliver_one(now=100, opener=receiver))
+            receiver.open.assert_called_once()
 
     def test_a_slow_callback_does_not_block_another_event(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -371,6 +393,7 @@ class DeliveryTests(unittest.TestCase):
                 def read(self, _limit): return json.dumps(self.payload).encode()
             class Receiver:
                 def open(self, request, timeout):
+                    self_test.assertEqual(timeout, 5)
                     value = json.loads(request.data); calls.append(value)
                     if value["status"] == "cleaned":
                         self_test.assertFalse(video.exists())

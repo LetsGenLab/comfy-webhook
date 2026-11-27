@@ -19,7 +19,7 @@ existing directory when upgrading; do not install a second copy.
 
 Run the following before ComfyUI starts, as the same OS user that runs
 ComfyUI. The installer needs Bash, curl, Git, and Python 3.10+ on Linux.
-Put the signing key and, for an existing pool, the bearer token in the
+For an existing pool, put the bearer token in the
 machine's private startup environment. For example, a Lets Gen staging machine
 can use:
 
@@ -28,14 +28,14 @@ set -o pipefail
 export COMFYUI_DIR=/root/ComfyUI
 export COMFYUI_PYTHON=/root/miniconda3/bin/python3
 export COMFY_WEBHOOK_API_TOKEN="${COMFY_WEBHOOK_API_TOKEN:?Set your private API token}"
-export COMFY_WEBHOOK_MANAGED_CALLBACKS=https://receiver.example/callback
+export COMFY_WEBHOOK_MANAGED_ENABLED=1
 curl -fsSL --connect-timeout 10 --max-time 60 \
   https://raw.githubusercontent.com/LetsGenLab/comfy-webhook/main/install.sh | bash
 ```
 
-Adding a callback URL enables managed mode by default. The script resolves
-the latest commit on `main` once, downloads its installer, and installs that
-same commit. To keep a known version across boots, set `WEBHOOK_REVISION` to
+The script resolves the latest commit on `main` once, downloads its
+installer, and installs that same commit. To keep a known version across
+boots, set `WEBHOOK_REVISION` to
 its full commit SHA and fetch `install.sh` from that commit. Start ComfyUI
 through its normal launcher after the script exits successfully.
 
@@ -58,8 +58,8 @@ user. After startup, verify that an unauthenticated request to `/system_stats`
 returns `401` and that both bearer and browser authentication succeed.
 
 For Lets Gen managed callbacks, also set `COMFY_WEBHOOK_MANAGED_ENABLED=1`
-and set `COMFY_WEBHOOK_MANAGED_CALLBACKS` to the exact callback URL for the
-target environment. Supply the receiver's signing configuration where required.
+and use the same API token as the pool. The plugin signs its callbacks with
+that token. Each API job provides its own HTTPS callback URL.
 Prefer a persistent user directory. When setting a separate
 `COMFY_WEBHOOK_MANAGED_OUTBOX_PATH`, set the callback field to
 `letsgen_callback_url`, API prefix to `/letsgen`, input prefix to
@@ -216,9 +216,8 @@ variables before starting ComfyUI:
 | Variable | Purpose |
 | --- | --- |
 | `COMFY_WEBHOOK_MANAGED_ENABLED` | Set to `1` to start the observer with the defaults below. |
-| `COMFY_WEBHOOK_MANAGED_CALLBACKS` | Comma-separated exact HTTPS callback URLs allowed for managed jobs. Required. |
-| `COMFY_WEBHOOK_MANAGED_SIGNING_KEY` | Optional secret, 32–1024 UTF-8 bytes, for signed callbacks. Store privately and share only with the receiver. |
-| `COMFY_WEBHOOK_MANAGED_SIGNING_KEYS` | Optional JSON object mapping every allowlisted callback URL to its own 32–1024 byte secret. Use instead of the single signing key when callbacks have different receivers. |
+| `COMFY_WEBHOOK_MANAGED_SIGNING_KEY` | Legacy default callback signing key. Omit it to use the machine API token. |
+| `COMFY_WEBHOOK_MANAGED_SIGNING_KEYS` | Legacy per-receiver signing overrides for receivers that still verify a separate key. |
 | `COMFY_WEBHOOK_MANAGED_OUTBOX_PATH` | Optional absolute SQLite path on a private persistent volume; create its parent directory first. Setting this also enables managed mode. |
 | `COMFY_WEBHOOK_MANAGED_CALLBACK_FIELD` | Per-job `extra_data` key, default `letsgen_callback_url`. |
 | `COMFY_WEBHOOK_MANAGED_API_PREFIX` | One path segment for capability and recovery endpoints, default `/letsgen`. |
@@ -228,18 +227,19 @@ variables before starting ComfyUI:
 When enabled using `COMFY_WEBHOOK_MANAGED_ENABLED`, the default outbox is
 `comfy-webhook/managed-outbox.sqlite` inside the ComfyUI user directory. The
 user directory must be on persistent storage for callbacks to survive machine
-replacement. An API job supplies an allowlisted callback in
+replacement. An API job supplies an HTTPS callback in
 `extra_data.letsgen_callback_url`. No callback address or credential is stored
 in this repository. Protect the entire ComfyUI API with authentication or a
-private network. Callback
-signing also requires verification by the receiving service.
+private network. The receiving service verifies callback signatures.
 
-For multiple receivers, the per-callback signing map must contain exactly the
-allowlisted URLs. Store the JSON map as a string in the owner-only settings
-file, remove the single-key setting, and retain every key needed by pending
-outbox events. Startup rejects an incomplete map or pending callback without a
-key. Staged-input cleanup accepts a valid signature from any configured key;
-the shared machine API credential and task-specific filename checks still apply.
+The machine API token signs callbacks to the HTTPS destination in each job.
+The capabilities response reports `callback_api_token: 1` in this mode.
+A receiver can retain its previous signing key during a rolling upgrade.
+Existing clients that check `callback_url_hashes` can use the hashes of the
+receivers in the signing map. A signing-map-only installation still requires
+a matching key for each signed destination. Retain the signing keys needed by
+pending outbox events. Staged-input cleanup accepts a valid signature from
+any configured key and still applies the task-specific filename checks.
 
 For backwards compatibility, enabling managed mode with an explicit outbox
 path retains its historical defaults (`managed_webhook_url`, `/webhook-managed`,
@@ -249,9 +249,9 @@ that mode with Lets Gen.
 The protocol requires a UUID prompt ID and top-level input names shaped like
 `<input-prefix>-<uuid>-<token>.png` (also `.jpg`, `.jpeg`, or `.webp`), and
 one top-level output named `<output-prefix>-<uuid>_<token>.mp4` or
-`<output-prefix>-<uuid>_<token>.png`. A job with no
-allowlisted per-job callback is not enrolled. Managed delivery persists
-terminal events and retries until the receiver confirms the terminal result.
+`<output-prefix>-<uuid>_<token>.png`. Managed jobs must supply a valid HTTPS
+callback URL. Managed delivery persists terminal events and retries until the
+receiver confirms the terminal result.
 After that confirmation it removes only the task-owned files and sends a `cleaned` event when the receiver requires
 it. Recovery endpoints expose pending events and acknowledgement by exact UUID.
 Unexpected acknowledgement bodies and network errors remain pending.
