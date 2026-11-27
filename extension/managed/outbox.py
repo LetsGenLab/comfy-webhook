@@ -31,7 +31,7 @@ def validate_managed_url(value):
 
 
 class Outbox:
-    def __init__(self, path, callback, output_root=None, input_root=None, clear_history=None, *, input_prefix, output_prefix, signing_key=None, signing_keys=None):
+    def __init__(self, path, callback, output_root=None, input_root=None, clear_history=None, *, input_prefix, output_prefix, signing_key=None, signing_keys=None, api_token_signing=False):
         if callback:
             validate_managed_url(callback)
         if not os.path.isabs(path):
@@ -41,6 +41,7 @@ class Outbox:
         if signing_key is not None and (not isinstance(signing_key, str) or not 32 <= len(signing_key.encode()) <= 1024):
             raise ValueError("Managed webhook signing key must be 32 to 1024 bytes")
         self._signing_key = signing_key.encode() if signing_key is not None else None
+        self._api_token_signing = api_token_signing
         if signing_keys is not None and (not isinstance(signing_keys, dict) or not signing_keys or any(
                 not isinstance(url, str) or not isinstance(key, str) or not 32 <= len(key.encode()) <= 1024
                 for url, key in signing_keys.items())):
@@ -72,7 +73,8 @@ class Outbox:
         if self._signing_keys and key is None:
             raise ValueError("Callback has no configured signing key")
         if key is not None:
-            headers["X-Comfy-Webhook-Signature"] = "sha256=" + hmac.new(key, body, hashlib.sha256).hexdigest()
+            scheme = "sha256-api-token" if self._api_token_signing and callback not in self._signing_keys else "sha256"
+            headers["X-Comfy-Webhook-Signature"] = scheme + "=" + hmac.new(key, body, hashlib.sha256).hexdigest()
         return urllib.request.Request(callback, data=body, method="POST", headers=headers)
 
     def add(self, event, callback=None, input_files=()):

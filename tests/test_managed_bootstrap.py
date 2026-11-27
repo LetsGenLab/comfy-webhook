@@ -108,6 +108,27 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(capability['callback_url_from_job'], 1)
             self.assertIn(('POST', '/webhook-managed/staged/{prompt_id}/cleanup'), handlers)
 
+    def test_machine_api_token_signs_callbacks_without_destination_configuration(self):
+        handlers = {}
+        def register(path):
+            def decorate(handler):
+                handlers[path] = handler
+                return handler
+            return decorate
+        server = SimpleNamespace(routes=SimpleNamespace(get=register, post=register, delete=register),
+                                 prompt_queue=SimpleNamespace(delete_history_item=lambda _: None))
+        with tempfile.TemporaryDirectory() as root, patch('extension.managed.bootstrap.Outbox') as box, \
+                patch('extension.managed.bootstrap.install_queue_hook'):
+            box.return_value.start.return_value = (None, SimpleNamespace(is_alive=lambda: True))
+            token = 'p' * 64
+            start(server, root, root, {'COMFY_WEBHOOK_MANAGED_ENABLED': '1', 'COMFY_WEBHOOK_API_TOKEN': token},
+                  user_directory=root)
+            self.assertEqual(box.call_args.kwargs['signing_key'], token)
+            self.assertTrue(box.call_args.kwargs['api_token_signing'])
+            result = json.loads(asyncio.run(handlers['/letsgen/capabilities'](None)).body)
+            self.assertEqual(result['callback_api_token'], 1)
+            self.assertEqual(result['callback_url_hashes'], [])
+
     def test_signing_overrides_keep_legacy_capability_hashes(self):
         callbacks = ['https://staging.example/callback', 'https://prod.example/callback']
         keys = {callbacks[0]: 's' * 32, callbacks[1]: 'p' * 32}

@@ -19,7 +19,7 @@ existing directory when upgrading; do not install a second copy.
 
 Run the following before ComfyUI starts, as the same OS user that runs
 ComfyUI. The installer needs Bash, curl, Git, and Python 3.10+ on Linux.
-Put the signing key and, for an existing pool, the bearer token in the
+For an existing pool, put the bearer token in the
 machine's private startup environment. For example, a Lets Gen staging machine
 can use:
 
@@ -58,8 +58,8 @@ user. After startup, verify that an unauthenticated request to `/system_stats`
 returns `401` and that both bearer and browser authentication succeed.
 
 For Lets Gen managed callbacks, also set `COMFY_WEBHOOK_MANAGED_ENABLED=1`
-and supply the receiver's signing configuration. Each API job provides its
-own HTTPS callback URL.
+and use the same API token as the pool. The plugin signs its callbacks with
+that token. Each API job provides its own HTTPS callback URL.
 Prefer a persistent user directory. When setting a separate
 `COMFY_WEBHOOK_MANAGED_OUTBOX_PATH`, set the callback field to
 `letsgen_callback_url`, API prefix to `/letsgen`, input prefix to
@@ -216,8 +216,8 @@ variables before starting ComfyUI:
 | Variable | Purpose |
 | --- | --- |
 | `COMFY_WEBHOOK_MANAGED_ENABLED` | Set to `1` to start the observer with the defaults below. |
-| `COMFY_WEBHOOK_MANAGED_SIGNING_KEY` | Optional default signing secret, 32–1024 UTF-8 bytes. Store privately and share only with the receiver. |
-| `COMFY_WEBHOOK_MANAGED_SIGNING_KEYS` | Optional JSON object mapping callback URLs to individual 32–1024 byte signing secrets. An entry takes precedence over the default key for that URL. |
+| `COMFY_WEBHOOK_MANAGED_SIGNING_KEY` | Legacy default callback signing key. Omit it to use the machine API token. |
+| `COMFY_WEBHOOK_MANAGED_SIGNING_KEYS` | Legacy per-receiver signing overrides for receivers that still verify a separate key. |
 | `COMFY_WEBHOOK_MANAGED_OUTBOX_PATH` | Optional absolute SQLite path on a private persistent volume; create its parent directory first. Setting this also enables managed mode. |
 | `COMFY_WEBHOOK_MANAGED_CALLBACK_FIELD` | Per-job `extra_data` key, default `letsgen_callback_url`. |
 | `COMFY_WEBHOOK_MANAGED_API_PREFIX` | One path segment for capability and recovery endpoints, default `/letsgen`. |
@@ -232,9 +232,9 @@ replacement. An API job supplies an HTTPS callback in
 in this repository. Protect the entire ComfyUI API with authentication or a
 private network. The receiving service verifies callback signatures.
 
-The default signing key works with job-supplied HTTPS destinations. Provide
-per-receiver overrides when receivers use different secrets. The capability
-response reports `callback_url_from_job: 1` when a default signing key is set.
+The machine API token signs callbacks to the HTTPS destination in each job.
+The capabilities response reports `callback_api_token: 1` in this mode.
+A receiver can retain its previous signing key during a rolling upgrade.
 Existing clients that check `callback_url_hashes` can use the hashes of the
 receivers in the signing map. A signing-map-only installation still requires
 a matching key for each signed destination. Retain the signing keys needed by

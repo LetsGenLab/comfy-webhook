@@ -194,7 +194,7 @@ class DeliveryTests(unittest.TestCase):
             default = 'd' * 32
             override = 's' * 32
             staging = 'https://staging.example/callback'
-            box = Outbox(path, '', signing_key=default, signing_keys={staging: override})
+            box = Outbox(path, '', signing_key=default, signing_keys={staging: override}, api_token_signing=True)
             queue = SimpleNamespace(mutex=threading.Lock(), currently_running={},
                                     task_done=lambda *args, **kwargs: None)
             install_queue_hook(queue, box)
@@ -211,8 +211,9 @@ class DeliveryTests(unittest.TestCase):
                 request = receiver.open.call_args.args[0]
                 self.assertEqual(request.full_url, url)
                 self.assertEqual(json.loads(request.data)['promptId'], prompt_id)
+                scheme = 'sha256' if url == staging else 'sha256-api-token'
                 self.assertEqual(request.get_header('X-comfy-webhook-signature'),
-                                 'sha256=' + hmac.new(key.encode(), request.data, hashlib.sha256).hexdigest())
+                                 scheme + '=' + hmac.new(key.encode(), request.data, hashlib.sha256).hexdigest())
             for url in (None, [], 'http://other.example/callback', 'https://user@other.example/callback'):
                 queue.currently_running[1] = (0, str(uuid.uuid4()), {}, {'managed_callback_url': url})
                 queue.task_done(1, {}, status)

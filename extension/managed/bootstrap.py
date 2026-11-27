@@ -31,7 +31,8 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
     input_prefix = environ.get("COMFY_WEBHOOK_MANAGED_INPUT_PREFIX", "letsgen-input" if automatic else "comfy-input").strip()
     output_prefix = environ.get("COMFY_WEBHOOK_MANAGED_OUTPUT_PREFIX", "letsgen" if automatic else "comfy").strip()
     api_prefix = environ.get("COMFY_WEBHOOK_MANAGED_API_PREFIX", "/letsgen" if automatic else "/webhook-managed").strip()
-    signing_key = environ.get("COMFY_WEBHOOK_MANAGED_SIGNING_KEY")
+    api_token = environ.get("COMFY_WEBHOOK_API_TOKEN")
+    signing_key = environ.get("COMFY_WEBHOOK_MANAGED_SIGNING_KEY", api_token)
     signing_keys = None
     if "COMFY_WEBHOOK_MANAGED_SIGNING_KEYS" in environ:
         try:
@@ -51,7 +52,7 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
     queue = server.prompt_queue
     outbox = Outbox(path, "", output_root, input_root, queue.delete_history_item,
                     input_prefix=input_prefix, output_prefix=output_prefix, signing_key=signing_key,
-                    signing_keys=signing_keys)
+                    signing_keys=signing_keys, api_token_signing=signing_key is not None and signing_key == api_token)
     install_queue_hook(queue, outbox, callback_field, input_prefix, output_prefix)
     stop, thread = outbox.start()
 
@@ -67,6 +68,8 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
                                                          for url in (signing_keys or {}))
             if signing_key is not None:
                 capabilities["callback_url_from_job"] = 1
+                if signing_key == api_token:
+                    capabilities["callback_api_token"] = 1
             capabilities["staged_cleanup"] = 1
             capabilities["reference_audio_cleanup"] = 1
         return web.json_response(capabilities)
