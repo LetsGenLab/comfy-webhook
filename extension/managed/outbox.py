@@ -17,6 +17,7 @@ from ..outbox import validate_url
 from .events import INPUT_LOADER_FIELDS, MAX_MANAGED_INPUTS, owned_input_pattern
 
 LOG = logging.getLogger("comfy-webhook-managed")
+CALLBACK_TIMEOUT_SECONDS = 5
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -164,8 +165,7 @@ class Outbox:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT id, body, attempts, callback, input_files FROM events WHERE next_at <= ? ORDER BY rowid LIMIT 1", (now,)).fetchone()
             if row:
-                # Delivery can include both a 120-second callback and a
-                # 120-second cleanup acknowledgement.
+                # Keep the lease across delivery and its cleanup acknowledgement.
                 db.execute("UPDATE events SET next_at = ? WHERE id = ?", (now + 300, row[0]))
         if row is None:
             return False
@@ -173,7 +173,7 @@ class Outbox:
         request = self._request(callback or self.callback, body)
         try:
             client = opener or urllib.request.build_opener(NoRedirect())
-            with client.open(request, timeout=120) as response:
+            with client.open(request, timeout=CALLBACK_TIMEOUT_SECONDS) as response:
                 if not 200 <= response.status < 300:
                     raise OSError("Callback returned non-success status")
                 result = json.loads(response.read(65537))
@@ -217,7 +217,7 @@ class Outbox:
                     ack = json.dumps({"version": 1, "deliveryId": delivery_id,
                                       "promptId": delivery_id, "status": "cleaned"}, separators=(",", ":")).encode()
                     cleanup_request = self._request(callback or self.callback, ack)
-                    with client.open(cleanup_request, timeout=120) as cleanup_response:
+                    with client.open(cleanup_request, timeout=CALLBACK_TIMEOUT_SECONDS) as cleanup_response:
                         if not 200 <= cleanup_response.status < 300:
                             raise OSError("Cleanup callback returned non-success status")
                         cleanup_result = json.loads(cleanup_response.read(65537))
