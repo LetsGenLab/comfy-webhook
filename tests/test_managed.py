@@ -393,7 +393,7 @@ class DeliveryTests(unittest.TestCase):
                 def read(self, _limit): return json.dumps(self.payload).encode()
             class Receiver:
                 def open(self, request, timeout):
-                    self_test.assertEqual(timeout, 5)
+                    self_test.assertEqual(timeout, 30)
                     value = json.loads(request.data); calls.append(value)
                     if value["status"] == "cleaned":
                         self_test.assertFalse(video.exists())
