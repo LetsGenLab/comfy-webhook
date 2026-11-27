@@ -580,6 +580,44 @@ class DeliveryTests(unittest.TestCase):
             with sqlite3.connect(path) as db:
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM events").fetchone(), (0,))
 
+    def test_durable_receipt_stops_delivery_without_deleting_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt_id = str(uuid.uuid4())
+            video = root / f"sample-{prompt_id}_00001_.mp4"
+            image = root / f"sample-input-{prompt_id}-reference.png"
+            unrelated = root / "other.png"
+            for path in (video, image, unrelated):
+                path.write_bytes(b"fixture")
+            path = str(root / "events.sqlite")
+            callback = "https://receiver.example/callback"
+            box = Outbox(path, callback, tmp, tmp, signing_key="a" * 32)
+            event = {"version": 1, "deliveryId": prompt_id, "promptId": prompt_id, "status": "succeeded",
+                     "outputs": [{"nodeId": "142", "group": "images", "filename": video.name, "subfolder": "", "type": "output"}]}
+            box.add(event, input_files=[image.name])
+
+            class Receiver:
+                status = 200
+                def open(self, request, timeout):
+                    assert json.loads(request.data) == {**event, "receiptVersion": 1}
+                    return self
+                def __enter__(self): return self
+                def __exit__(self, *args): pass
+                def read(self, _limit):
+                    return json.dumps({"accepted": True, "status": "received", "deliveryId": prompt_id, "cleanup": False}).encode()
+
+            self.assertTrue(box.deliver_one(now=100, opener=Receiver()))
+            restored = Outbox(path, callback, tmp, tmp, signing_key="a" * 32)
+            self.assertFalse(restored.deliver_one(now=500, opener=Receiver()))
+            self.assertEqual(restored.pending_event(prompt_id), event)
+            self.assertTrue(video.exists())
+            self.assertTrue(image.exists())
+            self.assertTrue(restored.recover_cleanup(prompt_id, {"accepted": True, "status": "succeeded", "cleanup": True}))
+            self.assertFalse(video.exists())
+            self.assertFalse(image.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertTrue(restored.forget_cleaned(prompt_id))
+
     def test_managed_cleanup_deletes_the_acknowledged_png_only(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

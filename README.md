@@ -255,6 +255,12 @@ receiver confirms the terminal result.
 After that confirmation it removes only the task-owned files and sends a `cleaned` event when the receiver requires
 it. Recovery endpoints expose pending events and acknowledgement by exact UUID.
 Unexpected acknowledgement bodies and network errors remain pending.
+Signed terminal deliveries advertise `receiptVersion: 1`. A receiver can
+return HTTP 200 with `accepted: true`, `status: "received"`, the matching
+`deliveryId`, and `cleanup: false`. This stops terminal delivery retries and
+keeps the outbox event and task files until the receiver's authenticated POST
+to `/outbox/{prompt_id}/ack` confirms storage. Receivers without this protocol
+can continue sending the existing terminal acknowledgements.
 
 The configured API prefix exposes `/capabilities` and `/outbox/{prompt_id}`
 plus POST/DELETE acknowledgement endpoints. These endpoints inherit the
