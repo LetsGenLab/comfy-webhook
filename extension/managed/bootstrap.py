@@ -70,6 +70,7 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
                 capabilities["callback_url_from_job"] = 1
                 if signing_key == api_token:
                     capabilities["callback_api_token"] = 1
+            capabilities["durable_callback_receipt"] = 1
             capabilities["staged_cleanup"] = 1
             capabilities["reference_audio_cleanup"] = 1
         return web.json_response(capabilities)

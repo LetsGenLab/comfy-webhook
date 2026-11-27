@@ -60,6 +60,8 @@ class Outbox:
                 db.execute("ALTER TABLE events ADD COLUMN callback TEXT")
             if "input_files" not in {row[1] for row in db.execute("PRAGMA table_info(events)")}:
                 db.execute("ALTER TABLE events ADD COLUMN input_files TEXT")
+            if "received" not in {row[1] for row in db.execute("PRAGMA table_info(events)")}:
+                db.execute("ALTER TABLE events ADD COLUMN received INTEGER NOT NULL DEFAULT 0")
             if self._signing_keys and self._signing_key is None:
                 destinations = {row[0] or self.callback for row in db.execute("SELECT DISTINCT callback FROM events")}
                 if not destinations.issubset(self._signing_keys):
@@ -132,7 +134,7 @@ class Outbox:
         cleaned = json.dumps({"version": 1, "deliveryId": prompt_id, "promptId": prompt_id,
                               "status": "cleaned"}, separators=(",", ":")).encode()
         with self.connect() as db:
-            changed = db.execute("UPDATE events SET body = ?, attempts = 0, next_at = 0 WHERE id = ? AND body = ?",
+            changed = db.execute("UPDATE events SET body = ?, attempts = 0, next_at = 0, received = 0 WHERE id = ? AND body = ?",
                                  (cleaned, prompt_id, row[0])).rowcount
         if not changed:
             return self.pending_event(prompt_id) == json.loads(cleaned)
@@ -163,14 +165,21 @@ class Outbox:
             # handle other jobs without sending this same event concurrently.
             # A crashed process leaves the event eligible again after the lease.
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT id, body, attempts, callback, input_files FROM events WHERE next_at <= ? ORDER BY rowid LIMIT 1", (now,)).fetchone()
+            row = db.execute("SELECT id, body, attempts, callback, input_files FROM events WHERE received = 0 AND next_at <= ? ORDER BY rowid LIMIT 1", (now,)).fetchone()
             if row:
                 # Keep the lease across delivery and its cleanup acknowledgement.
                 db.execute("UPDATE events SET next_at = ? WHERE id = ?", (now + 300, row[0]))
         if row is None:
             return False
         delivery_id, body, attempts, callback, input_files = row
-        request = self._request(callback or self.callback, body)
+        event = json.loads(body)
+        event_status = event.get("status") if isinstance(event, dict) else None
+        offer_receipt = (
+            self._signing_keys.get(callback or self.callback, self._signing_key) is not None
+            and event_status in ("succeeded", "failed", "interrupted")
+        )
+        wire_body = json.dumps({**event, "receiptVersion": 1}, separators=(",", ":"), ensure_ascii=False).encode() if offer_receipt else body
+        request = self._request(callback or self.callback, wire_body)
         try:
             client = opener or urllib.request.build_opener(NoRedirect())
             with client.open(request, timeout=CALLBACK_TIMEOUT_SECONDS) as response:
@@ -180,8 +189,12 @@ class Outbox:
                 if not isinstance(result, dict) or result.get("accepted") is not True:
                     raise ValueError("Callback acknowledgement is invalid")
                 status = result.get("status")
-                event = json.loads(body)
-                event_status = event.get("status") if isinstance(event, dict) else None
+                if offer_receipt and status == "received" and result.get("deliveryId") == delivery_id and result.get("cleanup") is False:
+                    # The receiver owns persistence. Retain files and the durable event
+                    # until its authenticated cleanup request arrives.
+                    with self.connect() as db:
+                        db.execute("UPDATE events SET received = 1 WHERE id = ? AND body = ?", (delivery_id, body))
+                    return True
                 if event_status == "cleaned":
                     if status != "cleaned":
                         raise ValueError("Cleanup callback acknowledgement is invalid")
@@ -227,8 +240,8 @@ class Outbox:
             if attempts == 0:
                 LOG.warning("ComfyUI callback deferred; retrying (%s)", type(error).__name__)
             with self.connect() as db:
-                db.execute("UPDATE events SET attempts = ?, next_at = ? WHERE id = ?",
-                           (attempts + 1, clock() + min(30, 2 ** min(attempts, 8)), delivery_id))
+                db.execute("UPDATE events SET attempts = ?, next_at = ? WHERE id = ? AND body = ?",
+                           (attempts + 1, clock() + min(30, 2 ** min(attempts, 8)), delivery_id, body))
             return False
         # History is only metadata; clear our completed success after the
         # Worker has stored it and all required cleanup acknowledgements passed.
@@ -238,7 +251,7 @@ class Outbox:
             except Exception:
                 LOG.warning("Could not clear acknowledged ComfyUI history")
         with self.connect() as db:
-            db.execute("DELETE FROM events WHERE id = ?", (delivery_id,))
+            db.execute("DELETE FROM events WHERE id = ? AND body = ?", (delivery_id, body))
         return True
 
     def cleanup_inputs(self, prompt_id, files):
