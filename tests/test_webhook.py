@@ -40,8 +40,7 @@ class WebhookTests(unittest.TestCase):
             fake_server = SimpleNamespace(PromptServer=SimpleNamespace(instance=SimpleNamespace(prompt_queue=queue, routes=routes)))
             fake_paths = SimpleNamespace(get_user_directory=lambda: tmp, get_input_directory=lambda: tmp, get_output_directory=lambda: tmp)
             with patch.dict(sys.modules, {"webhook_package_test": module, "server": fake_server, "folder_paths": fake_paths}), \
-                    patch.dict("os.environ", {"COMFY_WEBHOOK_MANAGED_ENABLED": "1",
-                                                "COMFY_WEBHOOK_MANAGED_CALLBACKS": "https://receiver.example/callback"}, clear=True):
+                    patch.dict("os.environ", {"COMFY_WEBHOOK_MANAGED_ENABLED": "1"}, clear=True):
                 try:
                     spec.loader.exec_module(module)
                     self.assertTrue(module.NODE_CLASS_MAPPINGS["ComfyWebhook"].OUTPUT_NODE)

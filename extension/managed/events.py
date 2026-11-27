@@ -90,7 +90,7 @@ def event_from_completion(prompt_id, status, history, output_prefix):
     return event
 
 
-def install_queue_hook(queue, outbox, callback_field, allowed_callbacks, input_prefix, output_prefix):
+def install_queue_hook(queue, outbox, callback_field, input_prefix, output_prefix):
     """Wrap just this queue instance; never block a GPU worker on HTTP."""
     if getattr(queue, "_comfy_managed_completion_hook", False):
         raise RuntimeError("ComfyUI completion hook already installed")
@@ -102,9 +102,8 @@ def install_queue_hook(queue, outbox, callback_field, allowed_callbacks, input_p
             prompt_id = item[1] if item else None
             extra = item[3] if item and len(item) > 3 and isinstance(item[3], dict) else {}
             callback = extra.get(callback_field)
-            callback = callback if isinstance(callback, str) and callback in allowed_callbacks else None
             graph = item[2] if item and len(item) > 2 else None
-            inputs = owned_input_files(prompt_id, graph, input_prefix) if callback else []
+            inputs = owned_input_files(prompt_id, graph, input_prefix) if isinstance(callback, str) and callback else []
         stored, event = False, None
         try:
             event = event_from_completion(prompt_id, status, history_result, output_prefix)

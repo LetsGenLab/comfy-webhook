@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import re
-from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -32,7 +31,6 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
     input_prefix = environ.get("COMFY_WEBHOOK_MANAGED_INPUT_PREFIX", "letsgen-input" if automatic else "comfy-input").strip()
     output_prefix = environ.get("COMFY_WEBHOOK_MANAGED_OUTPUT_PREFIX", "letsgen" if automatic else "comfy").strip()
     api_prefix = environ.get("COMFY_WEBHOOK_MANAGED_API_PREFIX", "/letsgen" if automatic else "/webhook-managed").strip()
-    callbacks = frozenset(x.strip() for x in environ.get("COMFY_WEBHOOK_MANAGED_CALLBACKS", "").split(",") if x.strip())
     signing_key = environ.get("COMFY_WEBHOOK_MANAGED_SIGNING_KEY")
     signing_keys = None
     if "COMFY_WEBHOOK_MANAGED_SIGNING_KEYS" in environ:
@@ -40,9 +38,8 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
             signing_keys = json.loads(environ["COMFY_WEBHOOK_MANAGED_SIGNING_KEYS"])
         except (TypeError, json.JSONDecodeError) as error:
             raise ValueError("Invalid managed webhook signing keys") from error
-        if (signing_key is not None or not isinstance(signing_keys, dict) or set(signing_keys) != callbacks
-                or any(not isinstance(key, str) or not 32 <= len(key.encode()) <= 1024 for key in signing_keys.values())):
-            raise ValueError("Managed callback keys must match the callback allowlist")
+        if not isinstance(signing_keys, dict):
+            raise ValueError("Invalid managed webhook signing keys")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", callback_field):
         raise ValueError("Invalid managed callback field")
     if callback_field == "webhook_url":
@@ -51,17 +48,11 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
         raise ValueError("Invalid managed filename prefix")
     if not re.fullmatch(r"/[A-Za-z0-9_-]{1,64}", api_prefix):
         raise ValueError("Invalid managed API prefix")
-    if not callbacks:
-        raise ValueError("Managed mode requires callback allowlist")
-    for callback in callbacks:
-        url = urlsplit(callback)
-        if url.scheme != "https" or not url.hostname or url.username or url.password or url.fragment:
-            raise ValueError("Invalid managed callback URL")
     queue = server.prompt_queue
     outbox = Outbox(path, "", output_root, input_root, queue.delete_history_item,
                     input_prefix=input_prefix, output_prefix=output_prefix, signing_key=signing_key,
                     signing_keys=signing_keys)
-    install_queue_hook(queue, outbox, callback_field, callbacks, input_prefix, output_prefix)
+    install_queue_hook(queue, outbox, callback_field, input_prefix, output_prefix)
     stop, thread = outbox.start()
 
     @server.routes.get(api_prefix + "/capabilities")
@@ -72,7 +63,10 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
             capabilities["callback_field"] = callback_field
             capabilities["input_prefix"] = input_prefix
             capabilities["output_prefix"] = output_prefix
-            capabilities["callback_url_hashes"] = sorted(hashlib.sha256(url.encode()).hexdigest() for url in callbacks)
+            capabilities["callback_url_hashes"] = sorted(hashlib.sha256(url.encode()).hexdigest()
+                                                         for url in (signing_keys or {}))
+            if signing_key is not None:
+                capabilities["callback_url_from_job"] = 1
             capabilities["staged_cleanup"] = 1
             capabilities["reference_audio_cleanup"] = 1
         return web.json_response(capabilities)
@@ -98,6 +92,10 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
         ok = await asyncio.to_thread(outbox.forget_cleaned, request.match_info["prompt_id"])
         return web.json_response({"accepted": True}) if ok else web.json_response({"error": "not ready"}, status=409)
 
+    cleanup_keys = tuple((signing_keys or {}).values())
+    if signing_key is not None:
+        cleanup_keys += (signing_key,)
+
     @server.routes.post(api_prefix + "/staged/{prompt_id}/cleanup")
     async def staged_cleanup(request):
         if request.content_length is not None and request.content_length > 4096:
@@ -109,9 +107,8 @@ def start(server, input_root, output_root, environ=os.environ, *, user_directory
                 if len(body) > 4096:
                     return web.json_response({"error": "too large"}, status=413)
             signature = request.headers.get("X-Comfy-Webhook-Signature", "")
-            keys = list(signing_keys.values()) if signing_keys is not None else ([signing_key] if signing_key is not None else [])
             matches = [hmac.compare_digest(signature, "sha256=" + hmac.new(key.encode(), body, hashlib.sha256).hexdigest())
-                       for key in keys] if isinstance(signature, str) and re.fullmatch(r"sha256=[0-9a-f]{64}", signature) else []
+                       for key in cleanup_keys] if isinstance(signature, str) and re.fullmatch(r"sha256=[0-9a-f]{64}", signature) else []
             if not any(matches):
                 return web.json_response({"error": "unauthorized"}, status=401)
             data = json.loads(body)

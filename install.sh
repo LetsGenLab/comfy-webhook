@@ -33,10 +33,6 @@ PY
         return 1
     fi
 
-    if [[ -n "${COMFY_WEBHOOK_MANAGED_CALLBACKS:-}" ]]; then
-        export COMFY_WEBHOOK_MANAGED_ENABLED="${COMFY_WEBHOOK_MANAGED_ENABLED:-1}"
-    fi
-
     installer="$(mktemp)"
     trap 'rm -f "$installer"' EXIT
     curl --fail --silent --show-error --location --connect-timeout 10 --max-time 60 \

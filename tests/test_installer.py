@@ -41,7 +41,6 @@ class InstallerTests(unittest.TestCase):
                 "GIT_CONFIG_KEY_0": f"url.{source.as_uri()}.insteadOf",
                 "GIT_CONFIG_VALUE_0": "https://github.com/LetsGenLab/comfy-webhook.git",
                 "COMFY_WEBHOOK_MANAGED_ENABLED": "1",
-                "COMFY_WEBHOOK_MANAGED_CALLBACKS": "https://example.invalid/callback",
             })
 
             def run(**settings):
@@ -63,7 +62,8 @@ class InstallerTests(unittest.TestCase):
 
             outbox = private_dir / "managed-outbox.sqlite"
             outbox.write_text("existing outbox")
-            del env["COMFY_WEBHOOK_MANAGED_CALLBACKS"]
+            legacy = "COMFY_WEBHOOK_MANAGED_CALLBACKS"
+            path.write_text(json.dumps({**settings, legacy: "https://example.invalid/old"}))
             updated = run(**{PASSWORD: "replacement password"})
             self.assertEqual(updated.returncode, 0, updated.stderr)
             self.assertEqual(json.loads(path.read_text()), {**settings, PASSWORD: "replacement password"})

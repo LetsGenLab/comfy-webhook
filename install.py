@@ -36,6 +36,7 @@ def prepare_settings(path):
         ):
             raise ValueError("Existing webhook settings must contain COMFY_WEBHOOK_ string values")
     settings.update({key: value for key, value in os.environ.items() if key.startswith("COMFY_WEBHOOK_")})
+    settings.pop("COMFY_WEBHOOK_MANAGED_CALLBACKS", None)
     if TOKEN not in settings:
         settings[TOKEN] = secrets.token_urlsafe(32)
     for name, minimum in ((TOKEN, 32), (PASSWORD, 1)):
@@ -110,8 +111,6 @@ def main():
                    or settings.get("COMFY_WEBHOOK_MANAGED_OUTBOX_PATH", "").strip())
         if managed and (custom_nodes / "letsgen_completion").exists():
             raise ValueError("Move the legacy letsgen_completion observer outside custom_nodes before enabling managed delivery")
-        if managed and not settings.get("COMFY_WEBHOOK_MANAGED_CALLBACKS", "").strip():
-            raise ValueError("Managed delivery requires COMFY_WEBHOOK_MANAGED_CALLBACKS")
         install_plugin(custom_nodes, sys.argv[1])
         write_settings(path, payload)
     print(f"Installed comfy-webhook at {sys.argv[1]}. Private settings: {path}")
